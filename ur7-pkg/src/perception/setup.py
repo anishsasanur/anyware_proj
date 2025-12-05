@@ -20,8 +20,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'process_pointcloud = perception.process_pointcloud:main',
-            'interactive_plane = perception.interactive_plane:main',
+            'block_detection = perception.block_detection:main',
         ],
     },
 )
