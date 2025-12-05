@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="description"
+        content="AnyWare: Stacking and Unstacking with SAM3 and UR7.">
+  <meta name="keywords" content="Robotics, SAM3, UR7, Stacking, Jenga, EECS106A">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AnyWare: Stacking and Unstacking with SAM3 and UR7</title>
+
+  <!-- Global site tag (gtag.js) - Google Analytics -->
+  <!-- <script async src="https://www.googletagmanager.com/gtag/js?id=G-PYVRSFMDRL"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+
+    function gtag() {
+      dataLayer.push(arguments);
+    }
+
+    gtag('js', new Date());
+
+    gtag('config', 'G-PYVRSFMDRL');
+  </script> -->
+
+  <link href="https://fonts.googleapis.com/css?family=Google+Sans|Noto+Sans|Castoro"
+        rel="stylesheet">
+
+  <link rel="stylesheet" href="./static/css/bulma.min.css">
+  <link rel="stylesheet" href="./static/css/bulma-carousel.min.css">
+  <link rel="stylesheet" href="./static/css/bulma-slider.min.css">
+  <link rel="stylesheet" href="./static/css/fontawesome.all.min.css">
+  <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/gh/jpswalsh/academicons@1/css/academicons.min.css">
+  <link rel="stylesheet" href="./static/css/index.css">
+  <link rel="icon" href="./static/images/favicon.svg">
+
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+  <script defer src="./static/js/fontawesome.all.min.js"></script>
+  <script src="./static/js/bulma-carousel.min.js"></script>
+  <script src="./static/js/bulma-slider.min.js"></script>
+  <script src="./static/js/index.js"></script>
+</head>
+<body>
+
+<nav class="navbar" role="navigation" aria-label="main navigation">
+  <div class="navbar-brand">
+    <a role="button" class="navbar-burger" aria-label="menu" aria-expanded="false">
+      <span aria-hidden="true"></span>
+      <span aria-hidden="true"></span>
+      <span aria-hidden="true"></span>
+    </a>
+  </div>
+  <div class="navbar-menu">
+    <div class="navbar-start" style="flex-grow: 1; justify-content: center;">
+      <a class="navbar-item" href="#">
+      <span class="icon">
+          <i class="fas fa-home"></i>
+      </span>
+      </a>
+    </div>
+
+  </div>
+</nav>
+
+
+<section class="hero">
+  <div class="hero-body">
+    <div class="container is-max-desktop">
+      <div class="columns is-centered">
+        <div class="column has-text-centered">
+          <h1 class="title is-1 publication-title">AnyWare: Stacking and Unstacking with SAM3 and UR7</h1>
+          <div class="is-size-5 publication-authors">
+            <span class="author-block">
+              <a href="#">EECS 106A Final Project Team</a>
+            </span>
+            <!-- Add actual authors here -->
+            <!--
+            <span class="author-block">
+              <a href="#">Student 1</a><sup>1</sup>,</span>
+            <span class="author-block">
+              <a href="#">Student 2</a><sup>1</sup>,</span>
+             -->
+          </div>
+
+          <div class="is-size-5 publication-authors">
+            <span class="author-block"><sup>1</sup>University of California, Berkeley</span>
+          </div>
+
+          <div class="column has-text-centered">
+            <div class="publication-links">
+              <!-- PDF Link. -->
+              <span class="link-block">
+                <a href="#"
+                   class="external-link button is-normal is-rounded is-dark">
+                  <span class="icon">
+                      <i class="fas fa-file-pdf"></i>
+                  </span>
+                  <span>Proposal PDF</span>
+                </a>
+              </span>
+              <!-- Video Link. -->
+              <span class="link-block">
+                <a href="#"
+                   class="external-link button is-normal is-rounded is-dark">
+                  <span class="icon">
+                      <i class="fab fa-youtube"></i>
+                  </span>
+                  <span>Video</span>
+                </a>
+              </span>
+              <!-- Code Link. -->
+              <span class="link-block">
+                <a href="#"
+                   class="external-link button is-normal is-rounded is-dark">
+                  <span class="icon">
+                      <i class="fab fa-github"></i>
+                  </span>
+                  <span>Code</span>
+                  </a>
+              </span>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="hero teaser">
+  <div class="container is-max-desktop">
+    <div class="hero-body">
+        <!-- Placeholder for teaser video/image -->
+      <div style="text-align: center;">
+          <img src="./static/images/boxes.jpg" alt="Boxes Stacking" style="max-width: 100%; height: auto;">
+      </div>
+      <!--
+      <video id="teaser" autoplay muted loop playsinline height="100%">
+        <source src="./static/videos/teaser.mp4"
+                type="video/mp4">
+      </video>
+      -->
+      <h2 class="subtitle has-text-centered">
+        <span class="dnerf">AnyWare</span> utilizes SAM3 to perceive and manipulate objects like boxes and Jenga blocks with a UR7 robotic arm.
+      </h2>
+    </div>
+  </div>
+</section>
+
+
+<!-- Carousel Section for Results/Images -->
+<section class="hero is-light is-small">
+  <div class="hero-body">
+    <div class="container">
+      <div id="results-carousel" class="carousel results-carousel">
+        <div class="item item-boxes">
+             <img src="./static/images/boxes.jpg" alt="Boxes" style="width: 100%; object-fit: contain; height: 300px;">
+        </div>
+        <div class="item item-jenga">
+            <img src="./static/images/jenga.png" alt="Jenga" style="width: 100%; object-fit: contain; height: 300px;">
+        </div>
+        <div class="item item-colored-boxes">
+            <img src="./static/images/colored_boxes.png" alt="Colored Boxes" style="width: 100%; object-fit: contain; height: 300px;">
+        </div>
+         <div class="item item-boxes-2">
+             <img src="./static/images/boxes.jpg" alt="Boxes" style="width: 100%; object-fit: contain; height: 300px;">
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<section class="section">
+  <div class="container is-max-desktop">
+    <!-- Abstract. -->
+    <div class="columns is-centered has-text-centered">
+      <div class="column is-four-fifths">
+        <h2 class="title is-3">Abstract</h2>
+        <div class="content has-text-justified">
+          <p>
+            We present <strong>AnyWare</strong>, a robotic system capable of autonomously stacking and unstacking boxes and performing delicate manipulation tasks such as unstacking Jenga blocks.
+          </p>
+          <p>
+            Our approach leverages the state-of-the-art <strong>Segment Anything Model 3 (SAM3)</strong> for robust object detection and segmentation in unstructured environments. By integrating these vision capabilities with a <strong>UR7 Robotic Arm</strong>, we enable precise pick-and-place operations.
+          </p>
+          <p>
+            The system is designed to handle varying object configurations and lighting conditions, demonstrating the versatility of foundation models in robotic manipulation. We aim to push the boundaries of what is possible with off-the-shelf robotic arms and advanced vision models, moving from simple box stacking to the complexity of Jenga game mechanics.
+          </p>
+        </div>
+      </div>
+    </div>
+    <!--/ Abstract. -->
+
+    <!-- Project Description / Methodology -->
+    <div class="columns is-centered has-text-centered">
+      <div class="column is-four-fifths">
+        <h2 class="title is-3">Methodology</h2>
+        <div class="content has-text-justified">
+            <h3 class="title is-4">Vision System (SAM3)</h3>
+            <p>
+                We utilize SAM3 to generate high-quality segmentation masks of the objects in the workspace. This allows the system to identify individual boxes or blocks, determine their pose (in conjunction with depth data or pose estimation algorithms), and plan grasp points.
+            </p>
+            <h3 class="title is-4">Robotic Control (UR7)</h3>
+            <p>
+                The UR7 robotic arm is controlled to execute the pick-and-place trajectories. We employ inverse kinematics to map the target grasp coordinates to joint angles. The control loop integrates visual feedback to adjust for errors and ensure stable stacking.
+            </p>
+        </div>
+    </div>
+    </div>
+  </div>
+</section>
+
+
+<section class="section" id="BibTeX">
+  <div class="container is-max-desktop content">
+    <h2 class="title">BibTeX</h2>
+    <pre><code>@article{anyware2024,
+  author    = {EECS 106A Team},
+  title     = {AnyWare: Stacking and Unstacking with SAM3 and UR7},
+  journal   = {EECS 106A Final Project},
+  year      = {2024},
+}</code></pre>
+  </div>
+</section>
+
+
+<footer class="footer">
+  <div class="container">
+    <div class="content has-text-centered">
+      <a class="icon-link" href="#">
+        <i class="fas fa-file-pdf"></i>
+      </a>
+      <a class="icon-link" href="#" class="external-link" disabled>
+        <i class="fab fa-github"></i>
+      </a>
+    </div>
+    <div class="columns is-centered">
+      <div class="column is-8">
+        <div class="content">
+          <p>
+            This website is licensed under a <a rel="license"
+                                                href="http://creativecommons.org/licenses/by-sa/4.0/">Creative
+            Commons Attribution-ShareAlike 4.0 International License</a>.
+          </p>
+          <p>
+            Template borrowed from <a href="https://github.com/nerfies/nerfies.github.io">Nerfies</a>.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
