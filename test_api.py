@@ -7,7 +7,7 @@ from PIL import Image
 def test_segmentation():
     url = "https://f748e9c1fb58.ngrok-free.app/segment"
     image_path = "data/colored_boxes.png"
-    output_dir = "test_output"
+    output_dir = "outputs/test_output"
     
     # Ensure output directory exists
     os.makedirs(output_dir, exist_ok=True)
