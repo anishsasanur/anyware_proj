@@ -84,7 +84,7 @@ def generate_launch_description():
 
     # MoveIt 
     ur_type = LaunchConfiguration("ur_type", default="ur7e")
-    launch_rviz = LaunchConfiguration("launch_rviz", default="true")
+    launch_rviz = LaunchConfiguration("launch_rviz", default="false")
 
     # Path to the MoveIt launch file
     moveit_launch_file = os.path.join(
@@ -100,6 +100,30 @@ def generate_launch_description():
             "ur_type": ur_type,
             "launch_rviz": launch_rviz
         }.items(),
+    )
+
+    # Custom RViz with our configuration
+    # Get path to your RViz config file (update package name as needed)
+    rviz_config_file = os.path.join(
+        get_package_share_directory('perception'),  # Change to your package name
+        'config',
+        'lab7.rviz'
+    )
+    
+    # If the config file doesn't exist at that path, try alternative location
+    if not os.path.exists(rviz_config_file):
+        rviz_config_file = os.path.join(
+            get_package_share_directory('planning'),  # Alternative package
+            'config',
+            'lab7.rviz'
+        )
+    
+    rviz_node = Node(
+        package='rviz2',
+        executable='rviz2',
+        name='rviz2',
+        output='screen',
+        arguments=['-d', rviz_config_file] if os.path.exists(rviz_config_file) else []
     )
 
     # -------------------------
@@ -120,5 +144,6 @@ def generate_launch_description():
         planning_tf_node,
         static_base_world,
         moveit_launch,
-        shutdown_on_any_exit
+        rviz_node,
+        # shutdown_on_any_exit
     ])
