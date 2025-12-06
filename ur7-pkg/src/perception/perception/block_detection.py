@@ -10,7 +10,7 @@ import base64
 import io
 import cv2
 
-URL = "https://077d375e3c14.ngrok-free.app/segment"
+URL = "https://73a0df306f87.ngrok-free.app/segment"
 
 
 class BlockDetectionNode(Node):
@@ -42,7 +42,7 @@ class BlockDetectionNode(Node):
         # Actual camera intrinsics (overwrites defaults)
         self.camera_info_sub = self.create_subscription(
             Image,
-            '/camera/camera/depth/camera_info',
+            '/camera/camera/color/camera_info',
             self.camera_info_callback,
             10
         )

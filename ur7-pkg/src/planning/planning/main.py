@@ -158,7 +158,7 @@ class UR7e_CubeGrasp(Node):
             current_state, 
             x, 
             y - 0.035, 
-            z + 0.16
+            z + 0.123
         )
         
         if grasp_js is None:
