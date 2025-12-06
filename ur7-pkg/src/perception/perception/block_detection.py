@@ -1,37 +1,30 @@
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import PointCloud2, Image
-from geometry_msgs.msg import PointStamped
-import sensor_msgs_py.point_cloud2 as pc2
 from sensor_msgs.msg import Image
-import numpy as np
-# from open3d.camera import PinholeCameraIntrinsic
-# from open3d.geometry import Image
-import os
-os.environ["OMP_NUM_THREADS"] = "1"
-import open3d as o3d
+from visualization_msgs.msg import Marker, MarkerArray
 from cv_bridge import CvBridge
+import open3d as o3d
+import numpy as np
 import requests
 import base64
 import io
 import cv2
 
-URL = "https://16a7d56f030a.ngrok-free.app/segment"
+URL = "https://4c9d058633bf.ngrok-free.app/segment"
 
 class RealSensePCSubscriber(Node):
     def __init__(self):
         super().__init__('realsense_pc_subscriber')
         self.bridge = CvBridge()
         
-        # Camera intrinsics (RealSense D435 defaults - adjust for your camera)
-        # You should get these from the camera_info topic
-        self.fx = 615.0  # focal length x
-        self.fy = 615.0  # focal length y
-        self.cx = 320.0  # principal point x
-        self.cy = 240.0  # principal point y
-        self.depth_scale = 0.001  # RealSense depth scale (typically 0.001 for mm to m)
+        # Default camera intrinsics (will be overwritten)
+        self.fx = 615.0
+        self.fy = 615.0
+        self.cx = 320.0
+        self.cy = 240.0
+        self.depth_scale = 0.001
         
-        # Subscribers
+        # Subscribers for camera depth and color images
         self.depth_sub = self.create_subscription(
             Image,
             '/camera/camera/depth/image_rect_raw',
@@ -45,7 +38,7 @@ class RealSensePCSubscriber(Node):
             10
         )
         
-        # Camera info subscriber to get actual intrinsics
+        # Actual camera intrinsics (overwrites defaults)
         self.camera_info_sub = self.create_subscription(
             Image,
             '/camera/camera/depth/camera_info',
@@ -53,26 +46,28 @@ class RealSensePCSubscriber(Node):
             10
         )
         
-        # Timers
-        self.create_timer(0.5, self.block_points_callback)
+        # Publisher for block center visualizing markers
+        self.marker_pub = self.create_publisher(MarkerArray, '/block_centers', 10)
         
-        # State Variables
+        # Detects block centers every couple of seconds
+        self.create_timer(0.5, self.block_centers_callback)
+        
+        # State variables
         self.depth_image = None
         self.rgb_image = None
         self.blocks = []
-        self.camera_intrinsics_set = False
+        self.K_set = False
         
         self.get_logger().info("Successfully started block detection node.")
     
     def camera_info_callback(self, msg):
-        """Get camera intrinsics from camera_info topic"""
-        if not self.camera_intrinsics_set:
-            # K is a 3x3 matrix: [fx, 0, cx, 0, fy, cy, 0, 0, 1]
+        if not self.K_set:
+            # K = [fx, 0, cx, 0, fy, cy, 0, 0, 1]
             self.fx = msg.K[0]
             self.fy = msg.K[4]
             self.cx = msg.K[2]
             self.cy = msg.K[5]
-            self.camera_intrinsics_set = True
+            self.K_set = True
             self.get_logger().info(
                 f"Camera intrinsics set: fx={self.fx}, fy={self.fy}, cx={self.cx}, cy={self.cy}"
             )
@@ -87,18 +82,7 @@ class RealSensePCSubscriber(Node):
             self.rgb_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
             self.get_logger().info(f"Got rgb image of shape {self.rgb_image.shape}")
     
-    def masked_depth_to_pointcloud(self, masked_depth, mask):
-        """
-        Convert masked depth image to Open3D point cloud
-        
-        Args:
-            masked_depth: Depth image with mask applied (H x W)
-            mask: Binary mask (H x W) with 0s and 255s
-            
-        Returns:
-            o3d.geometry.PointCloud: Point cloud of the masked region
-            np.ndarray: Center position (x, y, z)
-        """
+    def masked_depth_to_pointcloud(self, masked_depth):
         h, w = masked_depth.shape
         
         # Create Open3D camera intrinsic object
@@ -147,7 +131,7 @@ class RealSensePCSubscriber(Node):
         
         return pcd_filtered, center
     
-    def block_points_callback(self):
+    def block_centers_callback(self):
         if not (self.depth_image is None) and not (self.rgb_image is None) and not self.blocks:
             # Call SAM to get the masks
             _, im_arr = cv2.imencode('.jpg', self.rgb_image)
@@ -187,7 +171,7 @@ class RealSensePCSubscriber(Node):
                     masked_depth = np.where(mask_binary > 0, self.depth_image, 0)
                     
                     # Convert to point cloud and get center
-                    pcd, center = self.masked_depth_to_pointcloud(masked_depth, mask_binary)
+                    pcd, center = self.masked_depth_to_pointcloud(masked_depth)
                     
                     # Store block information
                     block_info = {
@@ -201,11 +185,8 @@ class RealSensePCSubscriber(Node):
                     self.get_logger().info(
                         f"Block {index}: Center at ({center[0]:.3f}, {center[1]:.3f}, {center[2]:.3f}) m"
                     )
-                    
-                    # Optional: Visualize the point cloud (for debugging)
-                    # o3d.visualization.draw_geometries([pcd])
                 
-                # Optional: Save or publish results
+                # Publish visualization markers
                 self.publish_block_centers()
                 
             else:
@@ -213,16 +194,46 @@ class RealSensePCSubscriber(Node):
                 self.get_logger().error(response.text)
     
     def publish_block_centers(self):
-        """Publish block center positions"""
+        marker_array = MarkerArray()
+        
         for block in self.blocks:
+            marker = Marker()
+            marker.header.frame_id = "camera_depth_optical_frame"
+            marker.header.stamp = self.get_clock().now().to_msg()
+            marker.ns = "block_centers"
+            marker.id = block['index']
+            marker.type = Marker.SPHERE
+            marker.action = Marker.ADD
+            
+            # Position
+            marker.pose.position.x = float(block['center'][0])
+            marker.pose.position.y = float(block['center'][1])
+            marker.pose.position.z = float(block['center'][2])
+            marker.pose.orientation.w = 1.0
+            
+            # Scale
+            marker.scale.x = 0.03
+            marker.scale.y = 0.03
+            marker.scale.z = 0.03
+            
+            # Color (red)
+            marker.color.r = 1.0
+            marker.color.g = 0.0
+            marker.color.b = 0.0
+            marker.color.a = 1.0
+            
+            marker.lifetime.sec = 0  # Persistent
+            
+            marker_array.markers.append(marker)
+            
             self.get_logger().info(
                 f"Block {block['index']}: "
                 f"Position = ({block['center'][0]:.3f}, {block['center'][1]:.3f}, {block['center'][2]:.3f}) m, "
                 f"Points = {len(block['pointcloud'].points)}"
             )
         
-        # You can add publishers here to publish PointStamped messages
-        # for each block center if needed
+        self.marker_pub.publish(marker_array)
+        self.get_logger().info(f"Published {len(marker_array.markers)} markers to /block_centers")
 
 def main(args=None):
     rclpy.init(args=args)
