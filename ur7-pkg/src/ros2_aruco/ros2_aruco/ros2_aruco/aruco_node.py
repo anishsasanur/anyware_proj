@@ -104,7 +104,7 @@ class ArucoNode(rclpy.node.Node):
 
         self.declare_parameter(
             name="image_topic",
-            value="/camera/image_rect_raw",
+            value='/camera/camera/color/image_rect_raw',
             descriptor=ParameterDescriptor(
                 type=ParameterType.PARAMETER_STRING,
                 description="Image topic to subscribe to.",
@@ -113,7 +113,7 @@ class ArucoNode(rclpy.node.Node):
 
         self.declare_parameter(
             name="camera_info_topic",
-            value="/camera/camera_info",
+            value='/camera/camera/color/camera_info',
             descriptor=ParameterDescriptor(
                 type=ParameterType.PARAMETER_STRING,
                 description="Camera info topic to subscribe to.",
