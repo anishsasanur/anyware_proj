@@ -1,13 +1,11 @@
-from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
 from launch.events import Shutdown
-from launch.actions import IncludeLaunchDescription  
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, RegisterEventHandler, EmitEvent
-from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch_ros.actions import Node
+from launch import LaunchDescription
 from launch.event_handlers import OnProcessExit
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.actions import IncludeLaunchDescription, RegisterEventHandler, EmitEvent, ExecuteProcess
 import os
 
 def generate_launch_description():
@@ -34,6 +32,28 @@ def generate_launch_description():
         output='screen'
     )
 
+    # Get path to gui launch file
+    gui_launch_file = os.path.join(
+        get_package_share_directory('planning'),
+        'gui',
+        'gui_launch.py'
+    )
+
+    # GUI launch process
+    gui_launch_process = ExecuteProcess(
+        cmd=['python3', gui_launch_file],
+        output='screen',
+        name='gui'
+    )
+
+    # GUI to robot node
+    gui_to_robot_node = Node(
+        package='planning',
+        executable='gui_to_robot',
+        name='gui_to_robot',
+        output='screen'
+    )
+
     # ArUco recognition
     aruco_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -45,7 +65,7 @@ def generate_launch_description():
         )
     )
 
-    # ik node
+    # IK node
     ik_node = Node (
         package='planning',
         executable='ik',
@@ -53,7 +73,7 @@ def generate_launch_description():
         output='screen'
     )
 
-    # transform_cube_pose_node
+    # Transform cube pose node
     tcp_node = Node(
         package='planning',
         executable='tcp',
@@ -70,10 +90,6 @@ def generate_launch_description():
     )
 
     # Static TF: base_link -> world
-    # -------------------------------------------------
-    # This TF is static because the "world" frame does not move.
-    # It is necessary to define the "world" frame for MoveIt to work properly as this is the defualt planning frame.
-    # -------------------------------------------------
     static_base_world = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
@@ -93,7 +109,7 @@ def generate_launch_description():
                 "ur_moveit.launch.py"
             )
 
-    # Include the MoveIt launch description
+    # Includes the MoveIt launch description
     moveit_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(moveit_launch_file),
         launch_arguments={
@@ -102,22 +118,14 @@ def generate_launch_description():
         }.items(),
     )
 
-    # Custom RViz with our configuration
-    # Get path to your RViz config file (update package name as needed)
+    # Path to the Rviz config file
     rviz_config_file = os.path.join(
-        get_package_share_directory('perception'),  # Change to your package name
+        get_package_share_directory('perception'),
         'config',
         'lab7.rviz'
     )
     
-    # If the config file doesn't exist at that path, try alternative location
-    if not os.path.exists(rviz_config_file):
-        rviz_config_file = os.path.join(
-            get_package_share_directory('planning'),  # Alternative package
-            'config',
-            'lab7.rviz'
-        )
-    
+    # Rviz Node
     rviz_node = Node(
         package='rviz2',
         executable='rviz2',
@@ -139,6 +147,8 @@ def generate_launch_description():
         realsense_launch,
         aruco_launch,
         block_detection_node,
+        gui_launch_process,
+        gui_to_robot_node,
         ik_node,
         tcp_node,
         planning_tf_node,
