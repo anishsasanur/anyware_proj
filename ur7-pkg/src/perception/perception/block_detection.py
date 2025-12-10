@@ -10,7 +10,7 @@ import base64
 import io
 import cv2
 
-URL = "https://73a0df306f87.ngrok-free.app/segment"
+URL = "https://ff956770fe91.ngrok-free.app/segment"
 
 
 class BlockDetectionNode(Node):

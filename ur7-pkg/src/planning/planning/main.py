@@ -56,6 +56,20 @@ class UR7e_CubeGrasp(Node):
 
         self.job_queue = []  # Entries should be of type either JointState or String('toggle_grip')
 
+        # Compute the rotated quaternion (90 degrees about z-axis)
+        # Start with default orientation (pointing down): qy=1.0
+        base_rot = R.from_quat([0.0, 1.0, 0.0, 0.0])  # [qx, qy, qz, qw]
+        # 90 degree rotation about z-axis
+        z_rot = R.from_euler('z', 90, degrees=True)
+        # Compose rotations
+        combined_rot = z_rot * base_rot
+        # Get quaternion [qx, qy, qz, qw]
+        self.rotated_quat = combined_rot.as_quat()
+        
+        self.get_logger().info(f"Using rotated quaternion: qx={self.rotated_quat[0]:.3f}, "
+                             f"qy={self.rotated_quat[1]:.3f}, qz={self.rotated_quat[2]:.3f}, "
+                             f"qw={self.rotated_quat[3]:.3f}")
+
     def joint_state_callback(self, msg: JointState):
         self.joint_state = msg
 
@@ -137,13 +151,16 @@ class UR7e_CubeGrasp(Node):
 
         self.get_logger().info(f"Planning grasp for cube at ({x:.3f}, {y:.3f}, {z:.3f})")
 
-        # 1) Move to Pre-Grasp Position (gripper above the cube)
-        # Offsets: x=0, y=-0.035 (gripper offset), z=+0.185 (above cube)
+        # Extract rotated quaternion components
+        qx, qy, qz, qw = self.rotated_quat
+
+        # 1) Move to Pre-Grasp Position (gripper above the cube) with rotated orientation
         pre_grasp_js = self.ik_planner.compute_ik(
             current_state, 
-            x - 0.0067, 
-            y - 0.0367, 
-            z + 0.267
+            x + 0.01, 
+            y - 0.03, 
+            z + 0.25,
+            qx=qx, qy=qy, qz=qz, qw=qw
         )
         
         if pre_grasp_js is None:
@@ -153,12 +170,13 @@ class UR7e_CubeGrasp(Node):
         current_state = pre_grasp_js
         self.get_logger().info("Added pre-grasp position to queue")
 
-        # 2) Move to Grasp Position (lower the gripper to the cube)
+        # 2) Move to Grasp Position (lower the gripper to the cube) with rotated orientation
         grasp_js = self.ik_planner.compute_ik(
             current_state, 
-            x - 0.0067,
-            y - 0.0367, 
-            z + 0.1567
+            x + 0.01,
+            y - 0.03, 
+            z + 0.15,
+            qx=qx, qy=qy, qz=qz, qw=qw
         )
         
         if grasp_js is None:
@@ -177,12 +195,13 @@ class UR7e_CubeGrasp(Node):
         current_state = pre_grasp_js
         self.get_logger().info("Added lift position to queue")
 
-        # 5) Move to release Position (0.4m in +x direction)
+        # 5) Move to release Position (0.4m in +x direction) with rotated orientation
         release_js = self.ik_planner.compute_ik(
             current_state, 
             x + 0.4, 
             y - 0.035, 
-            z + 0.185
+            z + 0.185,
+            qx=qx, qy=qy, qz=qz, qw=qw
         )
         
         if release_js is None:

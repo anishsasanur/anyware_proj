@@ -32,13 +32,13 @@ def generate_launch_description():
         output='screen'
     )
 
-    # # GUI to robot node
-    # gui_to_robot_node = Node(
-    #     package='planning',
-    #     executable='gui_to_robot',
-    #     name='gui_to_robot',
-    #     output='screen'
-    # )
+    # GUI to robot node
+    gui_to_robot_node = Node(
+        package='planning',
+        executable='gui_to_robot',
+        name='gui_to_robot',
+        output='screen'
+    )
 
     # ArUco recognition
     aruco_launch = IncludeLaunchDescription(
@@ -133,7 +133,7 @@ def generate_launch_description():
         realsense_launch,
         aruco_launch,
         block_detection_node,
-        # gui_to_robot_node,
+        gui_to_robot_node,
         ik_node,
         tcp_node,
         planning_tf_node,
