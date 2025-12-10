@@ -123,86 +123,72 @@ class BlockDetectionNode(Node):
         return pcd_filtered, center
 
 
+    def filter_image_by_hsv(self, img_rgb, hue_center, hue_width=15):
+        img_hsv = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2HSV)
+
+        h_min = max(0, hue_center - hue_width)
+        h_max = min(179, hue_center + hue_width)
+
+        lower_bound = np.array([h_min, 50, 50], dtype=np.uint8)
+        upper_bound = np.array([h_max, 255, 255], dtype=np.uint8)
+        
+        return cv2.inRange(img_hsv, lower_bound, upper_bound)
+
+
     def block_centers_callback(self):
-        if not (self.depth_image is None) and not (self.rgb_image is None):
-            self.blocks = []
+        if self.depth_image is None or self.rgb_image is None:
+            return
 
-            # Call SAM to get the masks
-            _, im_arr = cv2.imencode('.jpg', self.rgb_image)
-            io_buf = io.BytesIO(im_arr)
-            files = {"image": ("image.jpg", io_buf, "image/jpeg")}
-            data = {"prompt": "Square cubes"}
-            
-            response = requests.post(URL, files=files, data=data)
-            
-            if response.status_code == 200:
-                result = response.json()
-                print(f"SAM returned {result['count']} masks")
-                
-                # Create combined mask visualization
-                combined_mask = np.zeros_like(self.rgb_image)
-                
-                for mask_data in result['masks']:
-                    index = mask_data['index']
-                    b64_data = mask_data['mask_base64']
-                    
-                    # Decode mask
-                    mask_bytes = base64.b64decode(b64_data)
-                    nparr = np.frombuffer(mask_bytes, np.uint8)
-                    mask_img = cv2.imdecode(nparr, cv2.IMREAD_UNCHANGED)
-                    
-                    # Ensure mask is binary (0 or 255)
-                    if mask_img.max() > 1:
-                        mask_binary = (mask_img > 127).astype(np.uint8) * 255
-                    else:
-                        mask_binary = mask_img.astype(np.uint8) * 255
-                    
-                    # Apply mask to depth image
-                    # Ensure dimensions match
-                    if mask_binary.shape != self.depth_image.shape:
-                        mask_binary = cv2.resize(
-                            mask_binary, 
-                            (self.depth_image.shape[1], self.depth_image.shape[0])
-                        )
-                    
-                    masked_depth = np.where(mask_binary > 0, self.depth_image, 0)
-                    
-                    # Convert to point cloud and get center
-                    pcd, center = self.masked_depth_to_pointcloud(masked_depth)
-                    
-                    # Store block information
-                    block_info = {
-                        'index': index,
-                        'pointcloud': pcd,
-                        'center': center,
-                        'mask': mask_binary
-                    }
-                    self.blocks.append(block_info)
-                    
-                    # Add to combined mask with different colors for each block
-                    # Create color for this mask (use HSV colormap)
-                    color_hue = int((index * 180) / max(result['count'], 1))
-                    color = cv2.cvtColor(np.uint8([[[color_hue, 255, 255]]]), cv2.COLOR_HSV2BGR)[0][0]
-                    
-                    # Resize mask to RGB image size if needed
-                    if len(mask_binary.shape) == 2:
-                        mask_binary_rgb = cv2.resize(mask_binary, 
-                                                     (self.rgb_image.shape[1], self.rgb_image.shape[0]))
-                    else:
-                        mask_binary_rgb = mask_binary
-                    
-                    # Apply colored mask
-                    mask_3channel = np.stack([mask_binary_rgb, mask_binary_rgb, mask_binary_rgb], axis=-1)
-                    colored_mask = np.where(mask_3channel > 0, color, [0, 0, 0]).astype(np.uint8)
-                    combined_mask = cv2.addWeighted(combined_mask, 1.0, colored_mask, 0.7, 0)
-                
-                # Publish masks and centers
-                self.publish_binary_masks(combined_mask)
-                print(f"Published {result['count']} masks to /binary_masks")
-                self.publish_block_centers()
+        self.blocks = []
+        img = self.rgb_image
+        
+        # Visualization image (starts black)
+        combined_mask_vis = np.zeros_like(img)
 
-            else:
-                self.get_logger().error(f"Error, status code {response.status_code}\n{response.text}")
+        # Define the colors we want to find
+        targets = [
+            {'hue': 60,  'vis_color': (0, 255, 0), "variance": 10},   # Green
+            {'hue': 120, 'vis_color': (255, 0, 0), "variance": 10},   # Blue
+            {'hue': 15, 'vis_color': (0, 165, 255), "variance": 10}   # Orange
+        ]
+        found_count = 0
+
+        for target in targets:
+            # 2. Generate Mask based on Color
+            mask = self.filter_image_by_hsv(img, target['hue'], target["variance"])
+            
+            # 3. Apply mask to depth image
+            # Resize mask if depth/color resolutions differ
+            if mask.shape != self.depth_image.shape:
+                mask = cv2.resize(mask, (self.depth_image.shape[1], self.depth_image.shape[0]))
+            
+            # Create masked depth image (everything outside mask becomes 0 depth)
+            masked_depth = np.where(mask > 0, self.depth_image, 0)
+            
+            # 4. Get 3D Center of this entire color blob
+            pcd, center = self.masked_depth_to_pointcloud(masked_depth)
+
+            # 5. Store Block Info
+            self.blocks.append({
+                'index': target['index'],
+                'pointcloud': pcd,
+                'center': center,
+                'mask': mask
+            })
+            found_count += 1
+
+            # 6. Add to Visualization
+            # Paint the found pixels with their specific color (vis_color)
+            color_layer = np.zeros_like(img)
+            color_layer[mask > 0] = target['vis_color']
+            
+            # Add this layer to the combined visualization
+            combined_mask_vis = cv2.addWeighted(combined_mask_vis, 1.0, color_layer, 1.0, 0.0)
+
+        # Publish masks and centers
+        self.publish_binary_masks(combined_mask_vis)
+        print(f"Published {found_count} masks to /binary_masks")
+        self.publish_block_centers()
 
 
     def publish_binary_masks(self, masks):

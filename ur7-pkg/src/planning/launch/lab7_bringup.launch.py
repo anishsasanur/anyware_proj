@@ -32,13 +32,13 @@ def generate_launch_description():
         output='screen'
     )
 
-    # GUI to robot node
-    gui_to_robot_node = Node(
-        package='planning',
-        executable='gui_to_robot',
-        name='gui_to_robot',
-        output='screen'
-    )
+    # # GUI to robot node
+    # gui_to_robot_node = Node(
+    #     package='planning',
+    #     executable='gui_to_robot',
+    #     name='gui_to_robot',
+    #     output='screen'
+    # )
 
     # ArUco recognition
     aruco_launch = IncludeLaunchDescription(
@@ -90,10 +90,10 @@ def generate_launch_description():
 
     # Path to the MoveIt launch file
     moveit_launch_file = os.path.join(
-                get_package_share_directory("ur_moveit_config"),
-                "launch",
-                "ur_moveit.launch.py"
-            )
+        get_package_share_directory("ur_moveit_config"),
+        "launch",
+        "ur_moveit.launch.py"
+    )
 
     # Includes the MoveIt launch description
     moveit_launch = IncludeLaunchDescription(
@@ -133,7 +133,7 @@ def generate_launch_description():
         realsense_launch,
         aruco_launch,
         block_detection_node,
-        gui_to_robot_node,
+        # gui_to_robot_node,
         ik_node,
         tcp_node,
         planning_tf_node,
