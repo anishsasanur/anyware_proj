@@ -219,8 +219,9 @@ class BlockDetectionNode(Node):
             marker = Marker()
             marker.header.frame_id = "camera_depth_optical_frame"
             marker.header.stamp = self.get_clock().now().to_msg()
-            marker.ns = "block_centers"
+
             marker.id = block['index']
+            marker.ns = "block_centers"
             marker.type = Marker.SPHERE
             marker.action = Marker.ADD
             

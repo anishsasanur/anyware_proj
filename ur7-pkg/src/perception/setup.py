@@ -24,6 +24,7 @@ setup(
     entry_points={
         'console_scripts': [
             'block_detection = perception.block_detection:main',
+            'gui_to_robot = perception.gui_to_robot:main'
         ],
     },
 )

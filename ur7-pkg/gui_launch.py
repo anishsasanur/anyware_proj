@@ -134,15 +134,14 @@ class SquareGUI:
             center_x = ((coords[0] + coords[2]) / 2 - self.origin_x) / self.square_size
             center_y = (self.origin_y - (coords[1] + coords[3]) / 2) / self.square_size
             positions.append({
-                'square': i + 1,
+                'block': i + 1,
                 'x': center_x,
                 'y': center_y
             })
         
-        save_path = 'src/planning/planning/gui/block_plan.json'
-        with open(save_path, 'w') as f:
+        with open('block_plan.json', 'w') as f:
             json.dump(positions, f, indent=2)
-        print(f"Positions saved to {save_path}")
+        print(f"Positions saved to 'block_plan.json'")
 
 if __name__ == '__main__':
     root = tk.Tk()

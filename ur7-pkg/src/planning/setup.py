@@ -1,5 +1,6 @@
 from setuptools import find_packages, setup
 from glob import glob
+import os
 
 package_name = 'planning'
 
@@ -24,7 +25,6 @@ setup(
         'console_scripts': [
             'ik = planning.ik:main',
             'main = planning.main:main',
-            'gui_to_robot = gui.gui_to_robot:main',
             'tf = planning.static_tf_transform:main',
             'tcp = planning.transform_cube_pose:main',
         ],

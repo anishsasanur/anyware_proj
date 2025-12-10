@@ -34,7 +34,7 @@ def generate_launch_description():
 
     # GUI to robot node
     gui_to_robot_node = Node(
-        package='planning',
+        package='perception',
         executable='gui_to_robot',
         name='gui_to_robot',
         output='screen'
