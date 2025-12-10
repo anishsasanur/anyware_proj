@@ -141,9 +141,9 @@ class UR7e_CubeGrasp(Node):
         # Offsets: x=0, y=-0.035 (gripper offset), z=+0.185 (above cube)
         pre_grasp_js = self.ik_planner.compute_ik(
             current_state, 
-            x, 
-            y - 0.035, 
-            z + 0.185
+            x - 0.0067, 
+            y - 0.0367, 
+            z + 0.267
         )
         
         if pre_grasp_js is None:
@@ -156,9 +156,9 @@ class UR7e_CubeGrasp(Node):
         # 2) Move to Grasp Position (lower the gripper to the cube)
         grasp_js = self.ik_planner.compute_ik(
             current_state, 
-            x, 
-            y - 0.035, 
-            z + 0.123
+            x - 0.0067,
+            y - 0.0367, 
+            z + 0.1567
         )
         
         if grasp_js is None:

@@ -7,4 +7,4 @@ colcon build; source install/setup.bash;
 ros2 run planning main
 
 ros2 run ur7e_utils enable_comms
-
+ros2 run ur7e_utils reset_state; ros2 run ur7e_utils tuck
