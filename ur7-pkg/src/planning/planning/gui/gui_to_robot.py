@@ -21,17 +21,17 @@ class GuiToRobotNode(Node):
         self.watch_thread = threading.Thread(target=self.watch_positions_file, daemon=True)
         self.watch_thread.start()
         
-        self.get_logger().info('GUI to Robot node started. Watching square_positions.json')
+        self.get_logger().info('GUI to Robot node started. Watching block_plan.json')
     
     def watch_positions_file(self):
-        """Watch for changes to square_positions.json"""
+        """Watch for changes to block_plan.json"""
         last_mtime = 0
         
         while self.running:
             try:
                 import os
-                if os.path.exists('square_positions.json'):
-                    mtime = os.path.getmtime('square_positions.json')
+                if os.path.exists('block_plan.json'):
+                    mtime = os.path.getmtime('block_plan.json')
                     if mtime > last_mtime:
                         last_mtime = mtime
                         self.load_and_publish()
@@ -44,7 +44,7 @@ class GuiToRobotNode(Node):
     def load_and_publish(self):
         """Load positions from JSON and publish as markers"""
         try:
-            with open('square_positions.json', 'r') as f:
+            with open('block_plan.json', 'r') as f:
                 positions = json.load(f)
             
             if not positions:

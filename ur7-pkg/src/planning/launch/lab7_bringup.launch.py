@@ -32,20 +32,6 @@ def generate_launch_description():
         output='screen'
     )
 
-    # Get path to gui launch file
-    gui_launch_file = os.path.join(
-        get_package_share_directory('planning'),
-        'gui',
-        'gui_launch.py'
-    )
-
-    # GUI launch process
-    gui_launch_process = ExecuteProcess(
-        cmd=['python3', gui_launch_file],
-        output='screen',
-        name='gui'
-    )
-
     # GUI to robot node
     gui_to_robot_node = Node(
         package='planning',
@@ -147,7 +133,6 @@ def generate_launch_description():
         realsense_launch,
         aruco_launch,
         block_detection_node,
-        gui_launch_process,
         gui_to_robot_node,
         ik_node,
         tcp_node,

@@ -139,9 +139,10 @@ class SquareGUI:
                 'y': center_y
             })
         
-        with open('block_plan.json', 'w') as f:
+        save_path = 'src/planning/planning/gui/block_plan.json'
+        with open(save_path, 'w') as f:
             json.dump(positions, f, indent=2)
-        print("Positions saved to block_plan.json")
+        print(f"Positions saved to {save_path}")
 
 if __name__ == '__main__':
     root = tk.Tk()
