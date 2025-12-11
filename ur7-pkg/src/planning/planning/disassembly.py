@@ -6,20 +6,15 @@ from rclpy.action import ActionClient
 from control_msgs.action import FollowJointTrajectory
 from geometry_msgs.msg import PointStamped 
 from visualization_msgs.msg import MarkerArray
+from moveit_msgs.msg import RobotTrajectory
+from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from sensor_msgs.msg import JointState
 from tf2_ros import Buffer, TransformListener
 from tf2_geometry_msgs import do_transform_point
 from scipy.spatial.transform import Rotation as R
-from enum import Enum
+import numpy as np
 
 from planning.ik import IKPlanner
-
-
-class RobotState(Enum):
-    SCANNING = "scanning"
-    PLANNING = "planning"
-    EXECUTING = "executing"
-    COMPLETED = "completed"
 
 
 class UR7e_CubeGrasp(Node):
@@ -52,17 +47,23 @@ class UR7e_CubeGrasp(Node):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
+        self.cube_pose = None
+        self.current_plan = None
         self.joint_state = None
-        self.job_queue = []
-        self.state = RobotState.SCANNING
-        self.blocks_moved = 0
+        self.blocks_processed = False
 
         self.ik_planner = IKPlanner()
 
+        self.job_queue = []  # Entries should be of type either JointState or String('toggle_grip')
+
         # Compute the rotated quaternion (90 degrees about z-axis)
-        base_rot = R.from_quat([0.0, 1.0, 0.0, 0.0])
+        # Start with default orientation (pointing down): qy=1.0
+        base_rot = R.from_quat([0.0, 1.0, 0.0, 0.0])  # [qx, qy, qz, qw]
+        # 90 degree rotation about z-axis
         z_rot = R.from_euler('z', 90, degrees=True)
+        # Compose rotations
         combined_rot = z_rot * base_rot
+        # Get quaternion [qx, qy, qz, qw]
         self.rotated_quat = combined_rot.as_quat()
         
         self.get_logger().info(f"Using rotated quaternion: qx={self.rotated_quat[0]:.3f}, "
@@ -73,8 +74,8 @@ class UR7e_CubeGrasp(Node):
         self.joint_state = msg
 
     def blocks_callback(self, marker_array: MarkerArray):
-        """Process detected blocks when in SCANNING state"""
-        if self.state != RobotState.SCANNING:
+        """Process all detected blocks and select the highest one"""
+        if self.blocks_processed:
             return
 
         if self.joint_state is None:
@@ -82,9 +83,7 @@ class UR7e_CubeGrasp(Node):
             return
 
         if len(marker_array.markers) == 0:
-            self.get_logger().info(f"No blocks detected. Moved {self.blocks_moved} blocks total.")
-            self.state = RobotState.COMPLETED
-            rclpy.shutdown()
+            self.get_logger().info("No blocks detected")
             return
 
         self.get_logger().info(f"Received {len(marker_array.markers)} blocks")
@@ -93,10 +92,12 @@ class UR7e_CubeGrasp(Node):
         blocks_in_base = []
         for marker in marker_array.markers:
             try:
+                # Create PointStamped from marker position
                 point_stamped = PointStamped()
                 point_stamped.header = marker.header
                 point_stamped.point = marker.pose.position
 
+                # Transform to base_link
                 transform = self.tf_buffer.lookup_transform(
                     'base_link',
                     marker.header.frame_id,
@@ -127,13 +128,18 @@ class UR7e_CubeGrasp(Node):
             self.get_logger().error("No blocks successfully transformed")
             return
 
-        # Select highest block and plan grasp
+        # Find block with maximum z-coordinate (height in base_link frame)
         highest_block = max(blocks_in_base, key=lambda b: b['z'])
+        
         self.get_logger().info(
             f"Selected highest block (ID {highest_block['id']}) at height z={highest_block['z']:.3f}m"
         )
 
-        self.state = RobotState.PLANNING
+        # Set the cube pose and mark as processed
+        self.cube_pose = highest_block
+        self.blocks_processed = True
+
+        # Plan and execute the grasp
         self.plan_grasp_sequence(highest_block)
 
     def plan_grasp_sequence(self, cube_pose_dict):
@@ -145,62 +151,80 @@ class UR7e_CubeGrasp(Node):
 
         self.get_logger().info(f"Planning grasp for cube at ({x:.3f}, {y:.3f}, {z:.3f})")
 
+        # Extract rotated quaternion components
         qx, qy, qz, qw = self.rotated_quat
 
-        # 1) Pre-Grasp Position
+        # 1) Move to Pre-Grasp Position (gripper above the cube) with rotated orientation
         pre_grasp_js = self.ik_planner.compute_ik(
-            current_state, x + 0.01, y - 0.03, z + 0.25,
+            current_state, 
+            x + 0.01, 
+            y - 0.03, 
+            z + 0.25,
             qx=qx, qy=qy, qz=qz, qw=qw
         )
+        
         if pre_grasp_js is None:
             self.get_logger().error("Failed IK for pre-grasp")
             return
         self.job_queue.append(pre_grasp_js)
         current_state = pre_grasp_js
+        self.get_logger().info("Added pre-grasp position to queue")
 
-        # 2) Grasp Position
+        # 2) Move to Grasp Position (lower the gripper to the cube) with rotated orientation
         grasp_js = self.ik_planner.compute_ik(
-            current_state, x + 0.01, y - 0.03, z + 0.15,
+            current_state, 
+            x + 0.01,
+            y - 0.03, 
+            z + 0.15,
             qx=qx, qy=qy, qz=qz, qw=qw
         )
+        
         if grasp_js is None:
             self.get_logger().error("Failed IK for grasp")
             return
         self.job_queue.append(grasp_js)
         current_state = grasp_js
+        self.get_logger().info("Added grasp position to queue")
 
-        # 3) Close gripper
+        # 3) Close the gripper
         self.job_queue.append('toggle_grip')
+        self.get_logger().info("Added gripper close to queue")
 
-        # 4) Lift back to pre-grasp
+        # 4) Move back to Pre-Grasp Position
         self.job_queue.append(pre_grasp_js)
         current_state = pre_grasp_js
+        self.get_logger().info("Added lift position to queue")
 
-        # 5) Release position
+        # 5) Move to release Position (0.4m in +x direction) with rotated orientation
         release_js = self.ik_planner.compute_ik(
-            current_state, x + 0.4, y - 0.035, z + 0.185,
+            current_state, 
+            x + 0.4, 
+            y - 0.035, 
+            z + 0.185,
             qx=qx, qy=qy, qz=qz, qw=qw
         )
+        
         if release_js is None:
             self.get_logger().error("Failed IK for release position")
             return
         self.job_queue.append(release_js)
+        current_state = release_js
+        self.get_logger().info("Added release position to queue")
 
-        # 6) Open gripper
+        # 6) Release the gripper
         self.job_queue.append('toggle_grip')
+        self.get_logger().info("Added gripper open to queue")
 
-        self.get_logger().info(f"Planned {len(self.job_queue)} steps for grasp sequence")
-        self.state = RobotState.EXECUTING
+        # Start execution
         self.execute_jobs()
 
     def execute_jobs(self):
         if not self.job_queue:
-            if self.state == RobotState.EXECUTING:
-                self.blocks_moved += 1
-                self.get_logger().info(f"Block {self.blocks_moved} completed. Scanning for next block...")
-                self.state = RobotState.SCANNING
+            self.get_logger().info("All jobs completed.")
+            rclpy.shutdown()
             return
 
+        self.get_logger().info(f"Executing job queue, {len(self.job_queue)} jobs remaining.")
         next_job = self.job_queue.pop(0)
 
         if isinstance(next_job, JointState):
@@ -208,10 +232,16 @@ class UR7e_CubeGrasp(Node):
             if traj is None:
                 self.get_logger().error("Failed to plan to position")
                 return
+
+            self.get_logger().info("Planned to position")
             self._execute_joint_trajectory(traj.joint_trajectory)
             
         elif next_job == 'toggle_grip':
+            self.get_logger().info("Toggling gripper")
             self._toggle_gripper()
+        else:
+            self.get_logger().error("Unknown job type.")
+            self.execute_jobs()  # Proceed to next job
 
     def _toggle_gripper(self):
         if not self.gripper_cli.wait_for_service(timeout_sec=5.0):
@@ -224,13 +254,16 @@ class UR7e_CubeGrasp(Node):
         rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
 
         self.get_logger().info('Gripper toggled.')
-        self.execute_jobs()
+        self.execute_jobs()  # Proceed to next job
 
     def _execute_joint_trajectory(self, joint_traj):
+        self.get_logger().info('Waiting for controller action server...')
         self.exec_ac.wait_for_server()
+
         goal = FollowJointTrajectory.Goal()
         goal.trajectory = joint_traj
 
+        self.get_logger().info('Sending trajectory to controller...')
         send_future = self.exec_ac.send_goal_async(goal)
         send_future.add_done_callback(self._on_goal_sent)
 
@@ -241,13 +274,15 @@ class UR7e_CubeGrasp(Node):
             rclpy.shutdown()
             return
 
+        self.get_logger().info('Executing trajectory...')
         result_future = goal_handle.get_result_async()
         result_future.add_done_callback(self._on_exec_done)
 
     def _on_exec_done(self, future):
         try:
             result = future.result().result
-            self.execute_jobs()
+            self.get_logger().info('Execution complete.')
+            self.execute_jobs()  # Proceed to next job
         except Exception as e:
             self.get_logger().error(f'Execution failed: {e}')
 

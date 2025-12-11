@@ -7,7 +7,7 @@ import os
 
 # GUI coordinate system configuration
 BLOCK_WIDTH = 0.067  # meters in real world
-ORIGIN_OFFSET = [0.0, 0.67, 0.0]  # [x, y, z] offset from robot base_link to GUI origin
+WORLD_ORIGIN = [0.0, 0.67, 0.0]  # [x, y, z] offset from robot base_link to GUI origin
 
 class GuiToRobotNode(Node):
     def __init__(self):
@@ -41,9 +41,9 @@ class GuiToRobotNode(Node):
                 y_gui = pos['y']
                 
                 # Transform: GUI uses grid, robot uses m
-                x_robot = ORIGIN_OFFSET[0] + x_gui * BLOCK_WIDTH
-                y_robot = ORIGIN_OFFSET[1]
-                z_robot = ORIGIN_OFFSET[2] + y_gui * BLOCK_WIDTH  # y in GUI = z in real world
+                x_robot = WORLD_ORIGIN[0] + x_gui * BLOCK_WIDTH
+                y_robot = WORLD_ORIGIN[1]
+                z_robot = WORLD_ORIGIN[2] + y_gui * BLOCK_WIDTH  # y in GUI = z in world
                 
                 # Create marker
                 marker = Marker()
