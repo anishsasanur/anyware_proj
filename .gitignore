@@ -2,3 +2,4 @@ data/*
 outputs/*
 context
 .DS_Store
+__pycache__
