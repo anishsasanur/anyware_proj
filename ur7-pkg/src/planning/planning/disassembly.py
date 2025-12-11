@@ -11,31 +11,30 @@ from scipy.spatial.transform import Rotation as R
 from control_msgs.action import FollowJointTrajectory
 from planning.ik import IKPlanner
 
-
 class Disassembly(Node):
     def __init__(self):
-        super().__init__('cube_grasp')
+        super().__init__("cube_grasp")
 
         # Subscriber for block_centers
         self.block_centers_sub = self.create_subscription(
             MarkerArray,
-            '/block_centers',
+            "/block_centers",
             self.block_centers_callback,
             1
         )
         # Subscriber for joint_states
         self.joint_state_sub = self.create_subscription(
             JointState,
-            '/joint_states',
+            "/joint_states",
             self.joint_state_callback,
             1
         )
         # Clients
         self.action_cli = ActionClient(
             self, FollowJointTrajectory,
-            '/scaled_joint_trajectory_controller/follow_joint_trajectory'
+            "/scaled_joint_trajectory_controller/follow_joint_trajectory"
         )
-        self.gripper_cli = self.create_client(Trigger, '/toggle_gripper')
+        self.gripper_cli = self.create_client(Trigger, "/toggle_gripper")
 
         # TF setup
         self.tf_buffer = Buffer()
@@ -46,16 +45,16 @@ class Disassembly(Node):
         self.home_joint_state = None
         
         self.ik_planner = IKPlanner()
-        self.job_queue = [] # type: JointState or 'toggle_grip'
+        self.job_queue = [] # types: JointState or "toggle_grip"
 
         # Wrist pointing down ([qx,  qy,  qz,  qw ])
         base_rot = R.from_quat([0.0, 1.0, 0.0, 0.0])
         # 90 degree rotation for z:
-        z_90_rot = R.from_euler('z', 90, degrees=True)
+        z_90_rot = R.from_euler("z", 90, degrees=True)
         # Tgt wrist rotation
         self.wrist_rot = (z_90_rot * base_rot).as_quat()
         
-        print("[Disassembly] node started")
+        print("[Disassembly] node initalized")
 
 
     def joint_state_callback(self, msg: JointState):
@@ -65,6 +64,9 @@ class Disassembly(Node):
 
 
     def block_centers_callback(self, marker_array: MarkerArray):
+        if len(self.job_queue) != 0:
+            return
+
         if self.joint_state is None:
             print("[Disassembly] no joint state yet")
             return
@@ -84,7 +86,7 @@ class Disassembly(Node):
                 point.point = marker.pose.position
 
                 transform = self.tf_buffer.lookup_transform(
-                    'base_link',
+                    "base_link",
                     marker.header.frame_id,
                     rclpy.time.Time(),
                     timeout=rclpy.duration.Duration(seconds=1.0)
@@ -92,10 +94,10 @@ class Disassembly(Node):
                 point_in_base = do_transform_point(point, transform)
 
                 blocks_in_base.append({
-                    'id': marker.id,
-                    'x': point_in_base.point.x,
-                    'y': point_in_base.point.y,
-                    'z': point_in_base.point.z
+                    "id": marker.id,
+                    "x": point_in_base.point.x,
+                    "y": point_in_base.point.y,
+                    "z": point_in_base.point.z
                 })
             except Exception as e:
                 print(f"ERROR: [Disassembly] failed to transform block {marker.id}: \n{e}")
@@ -104,21 +106,21 @@ class Disassembly(Node):
         if len(blocks_in_base) == 0:
             print("ERROR: [Disassembly] failed to transform any blocks")
             return
-        
         print(f"[Disassembly] transformed {len(blocks_in_base)} blocks to base_link frame")
 
         # Find block with highest z-coordinate
-        highest_block = max(blocks_in_base, key=lambda b: b['z'])
+        highest_block = max(blocks_in_base, key=lambda b: b["z"])
         
-        print(f"Found highest block {highest_block['id']}")
-
+        print(f"Found highest block {highest_block["id"]}")
+        
         self.plan_grasp(highest_block)
+        self.execute_grasp()
 
 
-    def plan_grasp(self, cube_pose_dict):
-        x = cube_pose_dict['x']
-        y = cube_pose_dict['y']
-        z = cube_pose_dict['z']
+    def plan_grasp(self, block_pose: dict):
+        x = block_pose["x"]
+        y = block_pose["y"]
+        z = block_pose["z"]
         curr_pose = self.joint_state
 
         print(f"Planning grasp for block at ({x:.3f}, {y:.3f}, {z:.3f})")
@@ -157,7 +159,7 @@ class Disassembly(Node):
         
         # Grasp the block
         self.job_queue.append(grasp_pose)
-        self.job_queue.append('toggle_grip')
+        self.job_queue.append("toggle_grip")
 
         # Move back to pre_grasp_pose
         self.job_queue.append(pre_grasp_pose)
@@ -169,7 +171,6 @@ class Disassembly(Node):
             x + 0.420,
             y - 0.069,
             z + 0.167,
-            qx=qx, qy=qy, qz=qz, qw=qw
         )
         if drop_pose is None:
             print("ERROR: [Disassembly] failed to plan drop_pose")
@@ -177,28 +178,19 @@ class Disassembly(Node):
         
         # Drop the block
         self.job_queue.append(drop_pose)
-        self.job_queue.append('toggle_grip')
-        curr_pose = drop_pose
+        self.job_queue.append("toggle_grip")
         
-        # Move back to home position
-        home_pose = self.ik_planner.compute_ik(
-            curr_pose,
-            self.home_joint_state
-        )
-        if drop_pose is None:
-            print("ERROR: [Disassembly] failed to plan home_pose")
-            return
+        # Move back to home pose
+        self.job_queue.append(self.home_joint_state)
 
-        print("[Disassembly] added grasp to job queue")
-        self.execute_grasp()
+        print("[Disassembly] added plan to job queue")
 
 
     def execute_grasp(self):
-        if not self.job_queue:
+        if len(self.job_queue) == 0:
             print("[Disassembly] all jobs complete")
-            rclpy.shutdown()
+            # rclpy.shutdown()
             return
-
         print(f"[Disassembly] Executing job queue: {len(self.job_queue)} jobs")
         job = self.job_queue.pop(0)
 
@@ -209,17 +201,17 @@ class Disassembly(Node):
                 return
             self._execute_joint_trajectory(traj.joint_trajectory)
         
-        elif job == 'toggle_grip':
+        elif job == "toggle_grip":
             self._toggle_gripper()
         else:
             print(f"ERROR: [Disassembly] unknown job type {job}")
+
 
     def _toggle_gripper(self):
         if not self.gripper_cli.wait_for_service(timeout_sec=5.0):
             print("ERROR: [Disassembly] gripper unavailable")
             rclpy.shutdown()
             return
-
         req = Trigger.Request()
         future = self.gripper_cli.call_async(req)
         rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
@@ -241,7 +233,6 @@ class Disassembly(Node):
             print("ERROR: [Disassembly] goal rejected by controller")
             rclpy.shutdown()
             return
-
         print("[Disassembly] executing trajectory...")
         result_future = goal_handle.get_result_async()
         result_future.add_done_callback(self._on_exec_done)
@@ -261,5 +252,5 @@ def main(args=None):
     rclpy.spin(node)
     node.destroy_node()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

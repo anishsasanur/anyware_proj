@@ -1,233 +1,198 @@
-import rclpy
-from rclpy.node import Node
-from sensor_msgs.msg import Image, CameraInfo
-from visualization_msgs.msg import Marker, MarkerArray
-from cv_bridge import CvBridge
-import open3d as o3d
-import numpy as np
-import requests
-import base64
 import io
 import cv2
+import rclpy
+import base64
+import requests
+import numpy as np
+import open3d as o3d
+from rclpy.node import Node
+from cv_bridge import CvBridge
+from sensor_msgs.msg import Image, CameraInfo
+from visualization_msgs.msg import Marker, MarkerArray
 
-URL = "https://ff956770fe91.ngrok-free.app/segment"
+SAM_URL = "https://ff956770fe91.ngrok-free.app/segment"
 
-
-class BlockDetectionNode(Node):
+class Detection(Node):
     def __init__(self):
-        super().__init__('realsense_pc_subscriber')
-        self.bridge = CvBridge()
+        super().__init__("realsense_pc_subscriber")
         
-        # Default camera intrinsics (will be overwritten)
-        self.fx = 615.0
-        self.fy = 615.0
-        self.cx = 320.0
-        self.cy = 240.0
-        self.depth_scale = 0.001
-        
-        # Subscribers for camera depth and color images
-        self.depth_sub = self.create_subscription(
-            Image,
-            '/camera/camera/depth/image_rect_raw',
-            self.depth_callback,
-            10
-        )
-        self.img_sub = self.create_subscription(
-            Image,
-            '/camera/camera/color/image_rect_raw',
-            self.image_callback,
-            10
-        )
-        
-        # Actual camera intrinsics (overwrites defaults)
+        # Camera intrinsics
+        self.fx, self.fy, self.cx, self.cy, self.ds = [None] * 5
+        # Subscriber for camera_info
         self.camera_info_sub = self.create_subscription(
             CameraInfo,
-            '/camera/camera/depth/camera_info',
+            "/camera/camera/depth/camera_info",
             self.camera_info_callback,
-            10
+            1
         )
-        
+        # Subscribers for images
+        self.depth_image_sub = self.create_subscription(
+            Image,
+            "/camera/camera/depth/image_rect_raw",
+            self.depth_image_callback,
+            1
+        )
+        self.color_image_sub = self.create_subscription(
+            Image,
+            "/camera/camera/color/image_rect_raw",
+            self.color_image_callback,
+            1
+        )
         # Publishers
-        self.marker_pub = self.create_publisher(MarkerArray, '/block_centers', 10)
-        self.binary_masks_pub = self.create_publisher(Image, '/binary_masks', 10)
+        self.block_centers_pub = self.create_publisher(MarkerArray, "/block_centers", 10)
+        self.binary_masks_pub  = self.create_publisher(Image, "/binary_masks", 10)
+
+        # State vars
+        self.bridge = CvBridge()
+        self.depth_image = None
+        self.color_image = None
         
-        # Detects block centers every couple of seconds
+        # Detects every {refresh_rate} seconds
         self.refresh_rate = 2
         self.create_timer(self.refresh_rate, self.block_centers_callback)
         
-        # State variables
-        self.depth_image = None
-        self.rgb_image = None
-        self.blocks = []
-        self.K_set = False
-        
-        print("Successfully started block detection node")
+        print("[Detection] node initalized")
 
 
-    def camera_info_callback(self, msg):
-        if not self.K_set:
-            self.fx = msg.k[0]
-            self.fy = msg.k[4]
-            self.cx = msg.k[2]
-            self.cy = msg.k[5]
-            self.K_set = True
-            print(f"Camera intrinsics set: fx={self.fx}, fy={self.fy}, cx={self.cx}, cy={self.cy}")
+    def camera_info_callback(self, msg: CameraInfo):
+        self.fx = msg.k[0]
+        self.fy = msg.k[4]
+        self.cx = msg.k[2]
+        self.cy = msg.k[5]
+        print(f"[Detection] camera intrinsics fx={self.fx}, fy={self.fy}, cx={self.cx}, cy={self.cy}")
     
-    def depth_callback(self, msg):
-        self.depth_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+    def depth_image_callback(self, msg: Image):
+        self.depth_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
     
-    def image_callback(self, msg):
-        self.rgb_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
-
-
-    def masked_depth_to_pointcloud(self, masked_depth):
-        h, w = masked_depth.shape
-        
-        intrinsic = o3d.camera.PinholeCameraIntrinsic(
-            width=w,
-            height=h,
-            fx=self.fx,
-            fy=self.fy,
-            cx=self.cx,
-            cy=self.cy
-        )
-        
-        # Create open3d object from depth image
-        depth_o3d = o3d.geometry.Image(masked_depth.astype(np.uint16))
-        
-        # Create point cloud from open3d object
-        pcd = o3d.geometry.PointCloud.create_from_depth_image(
-            depth_o3d,
-            intrinsic,
-            depth_scale=1.0/self.depth_scale, # Convert to meters
-            depth_trunc=1.0 # Max depth in meters
-        )
-        
-        # Filter out invalid/near origin points
-        points = np.asarray(pcd.points)
-        valid_mask = (points[:, 2] > 0.01)
-        
-        if np.sum(valid_mask) == 0:
-            self.get_logger().error("No valid points in point cloud")
-            return pcd, np.array([0, 0, 0])
-        
-        # Filter point cloud
-        pcd_filtered = pcd.select_by_index(np.where(valid_mask)[0])
-        
-        # Compute the center of the point cloud
-        points_filtered = np.asarray(pcd_filtered.points)
-        center = np.mean(points_filtered, axis=0)
-        
-        print(f"{len(points_filtered)} points, center at ({center[0]:.3f}, {center[1]:.3f}, {center[2]:.3f})")
-        
-        return pcd_filtered, center
+    def color_image_callback(self, msg: Image):
+        self.color_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
 
 
     def block_centers_callback(self):
-        if not (self.depth_image is None) and not (self.rgb_image is None):
-            self.blocks = []
+        if self.depth_image is None or self.color_image:
+            print("[Detection]: no depth or color image yet")
+            return
+        block_centers = []
 
-            # Call SAM to get the masks
-            _, im_arr = cv2.imencode('.jpg', self.rgb_image)
-            io_buf = io.BytesIO(im_arr)
-            files = {"image": ("image.jpg", io_buf, "image/jpeg")}
-            data = {"prompt": "Square cubes"}
+        # Input data for SAM
+        _, color_array = cv2.imencode(".jpg", self.color_image)
+        io_bytes = io.BytesIO(color_array)
+        files = {"image": ("image.jpg", io_bytes, "image/jpeg")}
+        data  = {"prompt": "Square cubes"}
+        
+        # Output data of SAM
+        response = requests.post(SAM_URL, files=files, data=data)
+        if response.status_code != 200:
+            print(f"ERROR: [Detection] SAM status code {response.status_code} \n{response.text}")
+            return
+        
+        sam_data = response.json()
+        print(f"[Detection] SAM returned {sam_data["count"]} masks")
+        
+        # All masks for Rviz
+        all_masks = np.zeros_like(self.color_image)
+        
+        for mask in sam_data["masks"]:
+            mask_bytes = base64.b64decode(mask["mask_base64"])
+            mask_numpy = np.frombuffer(mask_bytes, np.uint8)
+            mask_image = cv2.imdecode(mask_numpy, cv2.IMREAD_UNCHANGED)
             
-            response = requests.post(URL, files=files, data=data)
-            
-            if response.status_code == 200:
-                result = response.json()
-                print(f"SAM returned {result['count']} masks")
-                
-                # Create combined mask visualization
-                combined_mask = np.zeros_like(self.rgb_image)
-                
-                for mask_data in result['masks']:
-                    index = mask_data['index']
-                    b64_data = mask_data['mask_base64']
-                    
-                    # Decode mask
-                    mask_bytes = base64.b64decode(b64_data)
-                    nparr = np.frombuffer(mask_bytes, np.uint8)
-                    mask_img = cv2.imdecode(nparr, cv2.IMREAD_UNCHANGED)
-                    
-                    # Ensure mask is binary (0 or 255)
-                    if mask_img.max() > 1:
-                        mask_binary = (mask_img > 127).astype(np.uint8) * 255
-                    else:
-                        mask_binary = mask_img.astype(np.uint8) * 255
-                    
-                    # Apply mask to depth image
-                    # Ensure dimensions match
-                    if mask_binary.shape != self.depth_image.shape:
-                        mask_binary = cv2.resize(
-                            mask_binary, 
-                            (self.depth_image.shape[1], self.depth_image.shape[0])
-                        )
-                    
-                    masked_depth = np.where(mask_binary > 0, self.depth_image, 0)
-                    
-                    # Convert to point cloud and get center
-                    pcd, center = self.masked_depth_to_pointcloud(masked_depth)
-                    
-                    # Store block information
-                    block_info = {
-                        'index': index,
-                        'pointcloud': pcd,
-                        'center': center,
-                        'mask': mask_binary
-                    }
-                    self.blocks.append(block_info)
-                    
-                    # Add to combined mask with different colors for each block
-                    # Create color for this mask (use HSV colormap)
-                    color_hue = int((index * 180) / max(result['count'], 1))
-                    color = cv2.cvtColor(np.uint8([[[color_hue, 255, 255]]]), cv2.COLOR_HSV2BGR)[0][0]
-                    
-                    # Resize mask to RGB image size if needed
-                    if len(mask_binary.shape) == 2:
-                        mask_binary_rgb = cv2.resize(mask_binary, 
-                                                     (self.rgb_image.shape[1], self.rgb_image.shape[0]))
-                    else:
-                        mask_binary_rgb = mask_binary
-                    
-                    # Apply colored mask
-                    mask_3channel = np.stack([mask_binary_rgb, mask_binary_rgb, mask_binary_rgb], axis=-1)
-                    colored_mask = np.where(mask_3channel > 0, color, [0, 0, 0]).astype(np.uint8)
-                    combined_mask = cv2.addWeighted(combined_mask, 1.0, colored_mask, 0.7, 0)
-                
-                # Publish masks and centers
-                self.publish_binary_masks(combined_mask)
-                print(f"Published {result['count']} masks to /binary_masks")
-                self.publish_block_centers()
-
+            # Create binary mask
+            if mask_image.max() > 1:
+                mask_binary = (mask_image > 127).astype(np.uint8) * 255
             else:
-                self.get_logger().error(f"Error, status code {response.status_code}\n{response.text}")
+                mask_binary = mask_image.astype(np.uint8) * 255
+            
+            # Masked depth image
+            if mask_binary.shape != self.depth_image.shape:
+                mask_binary = cv2.resize(
+                    mask_binary, 
+                    (self.depth_image.shape[1], self.depth_image.shape[0])
+                )
+            depth_masked = np.where(mask_binary > 0, self.depth_image, 0)
+            
+            # Store block center
+            pcd, center = self.depth_to_pointcloud(depth_masked)
+            self.block_centers.append(center)
+            
+            # Color mask for viz
+            hue = int((mask["index"] * 180) / max(sam_data["count"], 1))
+            color = cv2.cvtColor(np.uint8([[[hue, 255, 255]]]), cv2.COLOR_HSV2BGR)[0][0]
+            
+            # Resize mask to RGB
+            mask_rgb = mask_binary
+            if len(mask_binary.shape) == 2:
+                mask_rgb = cv2.resize(
+                    mask_binary,
+                (self.color_image.shape[1], self.color_image.shape[0])
+            )
+            # Apply colored mask
+            mask_channel = np.stack([mask_rgb, mask_rgb, mask_rgb], axis=-1)
+            mask_color = np.where(mask_channel > 0, color, [0, 0, 0]).astype(np.uint8)
+            all_masks = cv2.addWeighted(all_masks, 1.0, mask_color, 0.7, 0)
+        
+        # Publish masks, centers
+        self.publish_binary_masks(all_masks)
+        self.publish_block_centers(block_centers)
+
+        print(f"[Detection] published {sam_data["count"]} masks to /binary_masks")
 
 
-    def publish_binary_masks(self, masks):
-        mask_msg = self.bridge.cv2_to_imgmsg(masks, encoding='passthrough')
-        mask_msg.header.stamp = self.get_clock().now().to_msg()
-        mask_msg.header.frame_id = "camera_color_optical_frame"
-        self.binary_masks_pub.publish(mask_msg)
+    def depth_to_pointcloud(self, depth: Image):
+        h, w = depth.shape
+        
+        intrinsic = o3d.camera.PinholeCameraIntrinsic(
+            width=w, height=h,
+            fx=self.fx, fy=self.fy, cx=self.cx, cy=self.cy
+        )
+        depth_image = o3d.geometry.Image(depth.astype(np.uint16))
+        
+        pointcloud = o3d.geometry.PointCloud.create_from_depth_image(
+            depth_image,
+            intrinsic,
+            depth_scale=1.0/self.ds, # Convert to m
+            depth_trunc=1.0   # Max depth in meters
+        )
+        # Remove invalid / near origin points
+        points = np.asarray(pointcloud.points)
+        valid_mask = (points[:, 2] > 0.01)
+        
+        if np.sum(valid_mask) == 0:
+            print("ERROR: [Detection] invalid point cloud")
+            return
+        pcd_filtered = pointcloud.select_by_index(np.where(valid_mask)[0])
+        
+        # Computes pcd center
+        points_filtered = np.asarray(pcd_filtered.points)
+        center = np.mean(points_filtered, axis=0)
+        
+        print(f"[Detection] found {len(points_filtered)} points with center ({center})")
+        return pcd_filtered, center
 
 
-    def publish_block_centers(self):
+    def publish_binary_masks(self, all_masks: Image):
+        msg = self.bridge.cv2_to_imgmsg(all_masks, encoding="passthrough")
+        msg.header.frame_id = "camera_color_optical_frame"
+        msg.header.stamp = self.get_clock().now().to_msg()
+        self.binary_masks_pub.publish(msg)
+
+
+    def publish_block_centers(self, block_centers: list):
         marker_array = MarkerArray()
         
-        for block in self.blocks:
+        for id, block in enumerate(block_centers):
             marker = Marker()
             marker.header.frame_id = "camera_depth_optical_frame"
             marker.header.stamp = self.get_clock().now().to_msg()
 
-            marker.id = block['index']
+            marker.id = id
             marker.ns = "block_centers"
             marker.type = Marker.SPHERE
             marker.action = Marker.ADD
             
-            marker.pose.position.x = float(block['center'][0])
-            marker.pose.position.y = float(block['center'][1])
-            marker.pose.position.z = float(block['center'][2])
+            marker.pose.position.x = float(block["center"][0])
+            marker.pose.position.y = float(block["center"][1])
+            marker.pose.position.z = float(block["center"][2])
             marker.pose.orientation.w = 1.0
 
             marker.scale.x = 0.03
@@ -242,18 +207,16 @@ class BlockDetectionNode(Node):
             marker.lifetime.sec = self.refresh_rate
             marker_array.markers.append(marker)
 
-            print(f"Block {block['index']}, center at ({block['center'][0]:.3f}, {block['center'][1]:.3f}, {block['center'][2]:.3f})")
-
-        self.marker_pub.publish(marker_array)
-        print(f"Published {len(marker_array.markers)} markers to /block_centers")
+        self.block_centers_pub.publish(marker_array)
+        print(f"[Detection] published {len(marker_array.markers)} markers to /block_centers")
 
 
 def main(args=None):
     rclpy.init(args=args)
-    node = BlockDetectionNode()
+    node = Detection()
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
