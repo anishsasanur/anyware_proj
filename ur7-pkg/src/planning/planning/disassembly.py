@@ -111,7 +111,7 @@ class Disassembly(Node):
         # Find block with highest z-coordinate
         highest_block = max(blocks_in_base, key=lambda b: b["z"])
         
-        print(f"Found highest block {highest_block["id"]}")
+        print(f"Found highest block {highest_block['id']}")
         
         self.plan_grasp(highest_block)
         self.execute_grasp()
@@ -132,8 +132,8 @@ class Disassembly(Node):
         # +y: away from robot
         pre_grasp_pose = self.ik_planner.compute_ik(
             curr_pose, 
-            x + 0.01,
-            y - 0.03,
+            x,
+            y - 0.025,
             z + 0.25,
             qx=qx, qy=qy, qz=qz, qw=qw
         )
@@ -148,8 +148,8 @@ class Disassembly(Node):
         # +y: away from robot
         grasp_pose = self.ik_planner.compute_ik(
             curr_pose,
-            x + 0.01,
-            y - 0.03,
+            x,
+            y - 0.025,
             z + 0.15,
             qx=qx, qy=qy, qz=qz, qw=qw
         )

@@ -17,7 +17,7 @@ class Detection(Node):
         super().__init__("realsense_pc_subscriber")
         
         # Camera intrinsics
-        self.fx, self.fy, self.cx, self.cy, self.ds = [None] * 5
+        self.fx, self.fy, self.cx, self.cy, self.ds = [0.001] * 5
         # Subscriber for camera_info
         self.camera_info_sub = self.create_subscription(
             CameraInfo,
@@ -69,7 +69,7 @@ class Detection(Node):
 
 
     def block_centers_callback(self):
-        if self.depth_image is None or self.color_image:
+        if self.depth_image is None or self.color_image is None:
             print("[Detection]: no depth or color image yet")
             return
         block_centers = []
@@ -87,7 +87,7 @@ class Detection(Node):
             return
         
         sam_data = response.json()
-        print(f"[Detection] SAM returned {sam_data["count"]} masks")
+        print(f"[Detection] SAM returned {sam_data['count']} masks")
         
         # All masks for Rviz
         all_masks = np.zeros_like(self.color_image)
@@ -113,7 +113,7 @@ class Detection(Node):
             
             # Store block center
             pcd, center = self.depth_to_pointcloud(depth_masked)
-            self.block_centers.append(center)
+            block_centers.append(center)
             
             # Color mask for viz
             hue = int((mask["index"] * 180) / max(sam_data["count"], 1))
@@ -135,7 +135,7 @@ class Detection(Node):
         self.publish_binary_masks(all_masks)
         self.publish_block_centers(block_centers)
 
-        print(f"[Detection] published {sam_data["count"]} masks to /binary_masks")
+        print(f"[Detection] published {sam_data['count']} masks to /binary_masks")
 
 
     def depth_to_pointcloud(self, depth: Image):
@@ -180,7 +180,7 @@ class Detection(Node):
     def publish_block_centers(self, block_centers: list):
         marker_array = MarkerArray()
         
-        for id, block in enumerate(block_centers):
+        for id, center in enumerate(block_centers):
             marker = Marker()
             marker.header.frame_id = "camera_depth_optical_frame"
             marker.header.stamp = self.get_clock().now().to_msg()
@@ -190,9 +190,9 @@ class Detection(Node):
             marker.type = Marker.SPHERE
             marker.action = Marker.ADD
             
-            marker.pose.position.x = float(block["center"][0])
-            marker.pose.position.y = float(block["center"][1])
-            marker.pose.position.z = float(block["center"][2])
+            marker.pose.position.x = float(center[0])
+            marker.pose.position.y = float(center[1])
+            marker.pose.position.z = float(center[2])
             marker.pose.orientation.w = 1.0
 
             marker.scale.x = 0.03
