@@ -1,322 +1,243 @@
-# ROS Libraries
-from std_srvs.srv import Trigger
 import rclpy
 from rclpy.node import Node
+from std_srvs.srv import Trigger
 from rclpy.action import ActionClient
-from control_msgs.action import FollowJointTrajectory
-from geometry_msgs.msg import PointStamped 
-from visualization_msgs.msg import MarkerArray
-from moveit_msgs.msg import RobotTrajectory
-from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from sensor_msgs.msg import JointState
+from geometry_msgs.msg import PointStamped 
 from tf2_ros import Buffer, TransformListener
+from visualization_msgs.msg import MarkerArray
 from tf2_geometry_msgs import do_transform_point
 from scipy.spatial.transform import Rotation as R
-import numpy as np
-import json
-
+from control_msgs.action import FollowJointTrajectory
 from planning.ik import IKPlanner
 
-
-class UR7e_CubeGrasp(Node):
+class Disassembly(Node):
     def __init__(self):
-        super().__init__('cube_grasp')
+        super().__init__("cube_grasp")
 
-        FinalBlockPositionsJSON = json.load(open('FinalBlockPositions.json'))
-        self.FinalBlockPositions = FinalBlockPositionsJSON
-
-        # Subscribe to all block centers from detection
-        self.blocks_sub = self.create_subscription(
-            MarkerArray, 
-            '/block_centers', 
-            self.blocks_callback, 
+        # Subscriber for block_centers
+        self.block_centers_sub = self.create_subscription(
+            MarkerArray,
+            "/block_centers",
+            self.block_centers_callback,
             1
         )
-        
+        # Subscriber for joint_states
         self.joint_state_sub = self.create_subscription(
-            JointState, 
-            '/joint_states', 
-            self.joint_state_callback, 
+            JointState,
+            "/joint_states",
+            self.joint_state_callback,
             1
         )
-
-        self.exec_ac = ActionClient(
+        # Clients
+        self.action_cli = ActionClient(
             self, FollowJointTrajectory,
-            '/scaled_joint_trajectory_controller/follow_joint_trajectory'
+            "/scaled_joint_trajectory_controller/follow_joint_trajectory"
         )
+        self.gripper_cli = self.create_client(Trigger, "/toggle_gripper")
 
-        self.gripper_cli = self.create_client(Trigger, '/toggle_gripper')
-
-        # TF setup for coordinate transformations
+        # TF setup
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
-        self.cube_pose = None
-        self.current_plan = None
+        # Joint state and IK
         self.joint_state = None
-        self.blocks_processed = False
-
+        self.home_joint_state = None
+        
         self.ik_planner = IKPlanner()
+        self.job_queue = [] # types: JointState or "toggle_grip"
 
-        self.job_queue = []  # Entries should be of type either JointState or String('toggle_grip')
+        # Wrist pointing down ([qx,  qy,  qz,  qw ])
+        base_rot = R.from_quat([0.0, 1.0, 0.0, 0.0])
+        # 90 degree rotation for z:
+        z_90_rot = R.from_euler("z", 90, degrees=True)
+        # Tgt wrist rotation
+        self.wrist_rot = (z_90_rot * base_rot).as_quat()
+        
+        print("[Disassembly] node initalized")
 
-    def move_block(self, start_pose: dict, end_pose: dict):
-        """
-        High-level primitive:
-        Picks a block at start_pose and places it at end_pose.
-        Both poses must be in base_link frame.
-        """
-
-        if self.joint_state is None:
-            self.get_logger().error("No joint state available")
-            return
-
-        current_state = self.joint_state
-
-        sx, sy, sz = start_pose["x"], start_pose["y"], start_pose["z"]
-        fx, fy, fz = end_pose["x"], end_pose["y"], end_pose["z"]
-
-        self.get_logger().info(
-            f"Moving block from ({sx:.3f},{sy:.3f},{sz:.3f}) "
-            f"to ({fx:.3f},{fy:.3f},{fz:.3f})"
-        )
-
-        # -------------------------
-        # 1) Pre-grasp ABOVE start
-        # -------------------------
-        pre_grasp_js = self.ik_planner.compute_ik(
-            current_state,
-            sx - 0.0067,
-            sy - 0.0367,
-            sz + 0.267
-        )
-        if pre_grasp_js is None:
-            self.get_logger().error("Pre-grasp IK failed")
-            return
-
-        self.job_queue.append(pre_grasp_js)
-        current_state = pre_grasp_js
-
-        # -------------------------
-        # 2) Grasp pose
-        # -------------------------
-        grasp_js = self.ik_planner.compute_ik(
-            current_state,
-            sx - 0.0067,
-            sy - 0.0367,
-            sz + 0.1567
-        )
-        if grasp_js is None:
-            self.get_logger().error("Grasp IK failed")
-            return
-
-        self.job_queue.append(grasp_js)
-        current_state = grasp_js
-
-        # -------------------------
-        # 3) Close gripper
-        # -------------------------
-        self.job_queue.append("toggle_grip")
-
-        # -------------------------
-        # 4) Lift back to pre-grasp
-        # -------------------------
-        self.job_queue.append(pre_grasp_js)
-        current_state = pre_grasp_js
-
-        # -------------------------
-        # 5) Move ABOVE target
-        # -------------------------
-        pre_place_js = self.ik_planner.compute_ik(
-            current_state,
-            fx - 0.0067,
-            fy - 0.0367,
-            fz + 0.267
-        )
-        if pre_place_js is None:
-            self.get_logger().error("Pre-place IK failed")
-            return
-
-        self.job_queue.append(pre_place_js)
-        current_state = pre_place_js
-
-        # -------------------------
-        # 6) Lower to place pose
-        # -------------------------
-        place_js = self.ik_planner.compute_ik(
-            current_state,
-            fx - 0.0067,
-            fy - 0.0367,
-            fz + 0.1567
-        )
-        if place_js is None:
-            self.get_logger().error("Place IK failed")
-            return
-
-        self.job_queue.append(place_js)
-        current_state = place_js
-
-        # -------------------------
-        # 7) Open gripper
-        # -------------------------
-        self.job_queue.append("toggle_grip")
-
-        # -------------------------
-        # 8) Retreat back up
-        # -------------------------
-        self.job_queue.append(pre_place_js)
-
-        # Start execution if queue was previously empty
-        if len(self.job_queue) == 1:
-            self.execute_jobs()
 
     def joint_state_callback(self, msg: JointState):
+        if self.joint_state is None:
+            self.home_joint_state = msg
         self.joint_state = msg
 
-    def blocks_callback(self, marker_array: MarkerArray):
-        """Process all detected blocks and select the highest one"""
-        if self.blocks_processed:
+
+    def block_centers_callback(self, marker_array: MarkerArray):
+        if len(self.job_queue) != 0:
             return
 
         if self.joint_state is None:
-            self.get_logger().info("No joint state yet, cannot proceed")
+            print("[Disassembly] no joint state yet")
             return
 
         if len(marker_array.markers) == 0:
-            self.get_logger().info("No blocks detected")
+            print("[Disassembly] no blocks received")
             return
 
-        self.get_logger().info(f"Received {len(marker_array.markers)} blocks")
+        print(f"[Disassembly] received {len(marker_array.markers)} blocks")
 
-        # Transform all block positions to base_link frame
+        # Transform all block centers to base_link frame
         blocks_in_base = []
         for marker in marker_array.markers:
             try:
-                # Create PointStamped from marker position
-                point_stamped = PointStamped()
-                point_stamped.header = marker.header
-                point_stamped.point = marker.pose.position
+                point = PointStamped()
+                point.header = marker.header
+                point.point = marker.pose.position
 
-                # Transform to base_link
                 transform = self.tf_buffer.lookup_transform(
-                    'base_link',
+                    "base_link",
                     marker.header.frame_id,
                     rclpy.time.Time(),
                     timeout=rclpy.duration.Duration(seconds=1.0)
                 )
-                point_in_base = do_transform_point(point_stamped, transform)
+                point_in_base = do_transform_point(point, transform)
 
                 blocks_in_base.append({
-                    'id': marker.id,
-                    'x': point_in_base.point.x,
-                    'y': point_in_base.point.y,
-                    'z': point_in_base.point.z
+                    "id": marker.id,
+                    "x": point_in_base.point.x,
+                    "y": point_in_base.point.y,
+                    "z": point_in_base.point.z
                 })
-
-                self.get_logger().info(
-                    f"Block {marker.id} in base_link: "
-                    f"x={point_in_base.point.x:.3f}, "
-                    f"y={point_in_base.point.y:.3f}, "
-                    f"z={point_in_base.point.z:.3f}"
-                )
-
             except Exception as e:
-                self.get_logger().error(f"Failed to transform block {marker.id}: {str(e)}")
+                print(f"ERROR: [Disassembly] failed to transform block {marker.id}: \n{e}")
                 continue
 
         if len(blocks_in_base) == 0:
-            self.get_logger().error("No blocks successfully transformed")
+            print("ERROR: [Disassembly] failed to transform any blocks")
             return
+        print(f"[Disassembly] transformed {len(blocks_in_base)} blocks to base_link frame")
 
-        # Find block with maximum z-coordinate (height in base_link frame)
-        left_block = min(blocks_in_base, key=lambda b: b['x'])
+        # Find block with highest z-coordinate
+        leftmost_block = max(blocks_in_base, key=lambda b: b["x"])
         
-        self.get_logger().info(
-            f"Selected leftmost block (ID {left_block['id']}) at height z={left_block['z']:.3f}m"
+        print(f"Found highest block {leftmost_block["id"]}")
+        
+        self.plan_grasp(leftmost_block, {"x": 0.5, "y": 0.0, "z": 0.1})
+        self.execute_grasp()
+
+
+    def plan_grasp(self, block_pose: dict, place_pose: dict):
+        
+        bx, by, bz = block_pose["x"], block_pose["y"], block_pose["z"]
+        px, py, pz = place_pose["x"], place_pose["y"], place_pose["z"]
+
+        curr_pose = self.joint_state
+        qx, qy, qz, qw = self.wrist_rot
+
+        # Pre-grasp
+        pre_grasp = self.ik_planner.compute_ik(
+            curr_pose, bx+0.01, by-0.03, bz+0.25,
+            qx=qx, qy=qy, qz=qz, qw=qw
         )
-
-        # Set the cube pose and mark as processed
-        self.cube_pose = left_block
-        self.blocks_processed = True
-
-        # Plan and execute the grasp
-        self.move_block(left_block, self.FinalBlockPositions[0])
-        self.FinalBlockPositions.pop(0)
-
-    def execute_jobs(self):
-        if not self.job_queue:
-            self.get_logger().info("All jobs completed.")
-            rclpy.shutdown()
+        if pre_grasp is None:
             return
+        self.job_queue.append(pre_grasp)
+        curr_pose = pre_grasp
 
-        self.get_logger().info(f"Executing job queue, {len(self.job_queue)} jobs remaining.")
-        next_job = self.job_queue.pop(0)
+        # Grasp
+        grasp = self.ik_planner.compute_ik(
+            curr_pose, bx+0.01, by-0.03, bz+0.15,
+            qx=qx, qy=qy, qz=qz, qw=qw
+        )
+        if grasp is None:
+            return
+        self.job_queue.append(grasp)
+        self.job_queue.append("toggle_grip")
 
-        if isinstance(next_job, JointState):
-            traj = self.ik_planner.plan_to_joints(next_job)
+        # Lift
+        self.job_queue.append(pre_grasp)
+        curr_pose = pre_grasp
+
+        # Pre-drop
+        pre_drop = self.ik_planner.compute_ik(
+            curr_pose, px, py, pz+0.20,
+            qx=qx, qy=qy, qz=qz, qw=qw
+        )
+        if pre_drop is None:
+            return
+        self.job_queue.append(pre_drop)
+        curr_pose = pre_drop
+
+        # Drop
+        drop = self.ik_planner.compute_ik(
+            curr_pose, px, py, pz,
+            qx=qx, qy=qy, qz=qz, qw=qw
+        )
+        if drop is None:
+            return
+        self.job_queue.append(drop)
+        self.job_queue.append("toggle_grip")
+
+        # Home
+        self.job_queue.append(self.home_joint_state)
+
+
+    def execute_grasp(self):
+        if len(self.job_queue) == 0:
+            print("[Disassembly] all jobs complete")
+            # rclpy.shutdown()
+            return
+        print(f"[Disassembly] Executing job queue: {len(self.job_queue)} jobs")
+        job = self.job_queue.pop(0)
+
+        if isinstance(job, JointState):
+            traj = self.ik_planner.plan_to_joints(job)
             if traj is None:
-                self.get_logger().error("Failed to plan to position")
+                print("ERROR: [Disassembly] failed to execute plan")
                 return
-
-            self.get_logger().info("Planned to position")
             self._execute_joint_trajectory(traj.joint_trajectory)
-            
-        elif next_job == 'toggle_grip':
-            self.get_logger().info("Toggling gripper")
+        
+        elif job == "toggle_grip":
             self._toggle_gripper()
         else:
-            self.get_logger().error("Unknown job type.")
-            self.execute_jobs()  # Proceed to next job
+            print(f"ERROR: [Disassembly] unknown job type {job}")
+
 
     def _toggle_gripper(self):
         if not self.gripper_cli.wait_for_service(timeout_sec=5.0):
-            self.get_logger().error('Gripper service not available')
+            print("ERROR: [Disassembly] gripper unavailable")
             rclpy.shutdown()
             return
-
         req = Trigger.Request()
         future = self.gripper_cli.call_async(req)
         rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
-
-        self.get_logger().info('Gripper toggled.')
-        self.execute_jobs()  # Proceed to next job
+        self.execute_grasp()
 
     def _execute_joint_trajectory(self, joint_traj):
-        self.get_logger().info('Waiting for controller action server...')
-        self.exec_ac.wait_for_server()
-
+        print("[Disassembly] waiting for controller action server...")
+        self.action_cli.wait_for_server()
         goal = FollowJointTrajectory.Goal()
         goal.trajectory = joint_traj
 
-        self.get_logger().info('Sending trajectory to controller...')
-        send_future = self.exec_ac.send_goal_async(goal)
+        print("[Disassembly] sending trajectory to controller...")
+        send_future = self.action_cli.send_goal_async(goal)
         send_future.add_done_callback(self._on_goal_sent)
 
     def _on_goal_sent(self, future):
         goal_handle = future.result()
         if not goal_handle.accepted:
-            self.get_logger().error('Goal rejected by controller')
+            print("ERROR: [Disassembly] goal rejected by controller")
             rclpy.shutdown()
             return
-
-        self.get_logger().info('Executing trajectory...')
+        print("[Disassembly] executing trajectory...")
         result_future = goal_handle.get_result_async()
         result_future.add_done_callback(self._on_exec_done)
 
     def _on_exec_done(self, future):
         try:
             result = future.result().result
-            self.get_logger().info('Execution complete.')
-            self.execute_jobs()  # Proceed to next job
+            print("[Disassembly] execution complete.")
+            self.execute_grasp()
         except Exception as e:
-            self.get_logger().error(f'Execution failed: {e}')
+            print(f"ERROR: [Disassembly] execution failed: \n{e}")
 
 
 def main(args=None):
     rclpy.init(args=args)
-    node = UR7e_CubeGrasp()
+    node = Disassembly()
     rclpy.spin(node)
     node.destroy_node()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

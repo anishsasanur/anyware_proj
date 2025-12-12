@@ -140,14 +140,18 @@ class UR7e_CubeGrasp(Node):
         self.blocks_processed = True
 
         # Plan and execute the grasp
-        self.plan_grasp_sequence(highest_block)
+        end_pose = {"x": 0.85, "y": 0.85, "z": 0.5}
+        self.plan_grasp_sequence(highest_block, end_pose)
 
-    def plan_grasp_sequence(self, cube_pose_dict):
+    def plan_grasp_sequence(self, cube_pose_dict, end_pose_dict):
         """Plan the grasp sequence for the selected cube"""
         x = cube_pose_dict['x']
         y = cube_pose_dict['y']
         z = cube_pose_dict['z']
         current_state = self.joint_state
+
+        x_offset = 0.01
+        y_offset = -0.03
 
         self.get_logger().info(f"Planning grasp for cube at ({x:.3f}, {y:.3f}, {z:.3f})")
 
@@ -157,8 +161,8 @@ class UR7e_CubeGrasp(Node):
         # 1) Move to Pre-Grasp Position (gripper above the cube) with rotated orientation
         pre_grasp_js = self.ik_planner.compute_ik(
             current_state, 
-            x + 0.01, 
-            y - 0.03, 
+            x + x_offset, 
+            y + y_offset, 
             z + 0.25,
             qx=qx, qy=qy, qz=qz, qw=qw
         )
@@ -173,8 +177,8 @@ class UR7e_CubeGrasp(Node):
         # 2) Move to Grasp Position (lower the gripper to the cube) with rotated orientation
         grasp_js = self.ik_planner.compute_ik(
             current_state, 
-            x + 0.01,
-            y - 0.03, 
+            x + x_offset,
+            y + y_offset, 
             z + 0.15,
             qx=qx, qy=qy, qz=qz, qw=qw
         )
@@ -191,19 +195,29 @@ class UR7e_CubeGrasp(Node):
         self.get_logger().info("Added gripper close to queue")
 
         # 4) Move back to Pre-Grasp Position
+        pre_grasp_js = self.ik_planner.compute_ik(
+            current_state, 
+            x + x_offset, 
+            y + y_offset, 
+            z + 0.25,
+            qx=qx, qy=qy, qz=qz, qw=qw
+        )
+        
+        if pre_grasp_js is None:
+            self.get_logger().error("Failed IK for pre-grasp")
+            return
         self.job_queue.append(pre_grasp_js)
         current_state = pre_grasp_js
-        self.get_logger().info("Added lift position to queue")
+        self.get_logger().info("Added pre-grasp position to queue")
 
         # 5) Move to release Position (0.4m in +x direction) with rotated orientation
         release_js = self.ik_planner.compute_ik(
-            current_state, 
-            x + 0.4, 
-            y - 0.035, 
-            z + 0.185,
+            current_state,
+            end_pose_dict['x'],
+            end_pose_dict['y'],
+            end_pose_dict['z'],
             qx=qx, qy=qy, qz=qz, qw=qw
         )
-        # (0.134, 0.697, -0.225)
         
         if release_js is None:
             self.get_logger().error("Failed IK for release position")

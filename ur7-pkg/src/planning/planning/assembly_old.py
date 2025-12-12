@@ -13,6 +13,7 @@ from tf2_ros import Buffer, TransformListener
 from tf2_geometry_msgs import do_transform_point
 from scipy.spatial.transform import Rotation as R
 import numpy as np
+import json
 
 from planning.ik import IKPlanner
 
@@ -20,6 +21,9 @@ from planning.ik import IKPlanner
 class UR7e_CubeGrasp(Node):
     def __init__(self):
         super().__init__('cube_grasp')
+
+        FinalBlockPositionsJSON = json.load(open('FinalBlockPositions.json'))
+        self.FinalBlockPositions = FinalBlockPositionsJSON
 
         # Subscribe to all block centers from detection
         self.blocks_sub = self.create_subscription(
@@ -56,19 +60,115 @@ class UR7e_CubeGrasp(Node):
 
         self.job_queue = []  # Entries should be of type either JointState or String('toggle_grip')
 
-        # Compute the rotated quaternion (90 degrees about z-axis)
-        # Start with default orientation (pointing down): qy=1.0
-        base_rot = R.from_quat([0.0, 1.0, 0.0, 0.0])  # [qx, qy, qz, qw]
-        # 90 degree rotation about z-axis
-        z_rot = R.from_euler('z', 90, degrees=True)
-        # Compose rotations
-        combined_rot = z_rot * base_rot
-        # Get quaternion [qx, qy, qz, qw]
-        self.rotated_quat = combined_rot.as_quat()
-        
-        self.get_logger().info(f"Using rotated quaternion: qx={self.rotated_quat[0]:.3f}, "
-                             f"qy={self.rotated_quat[1]:.3f}, qz={self.rotated_quat[2]:.3f}, "
-                             f"qw={self.rotated_quat[3]:.3f}")
+    def move_block(self, start_pose: dict, end_pose: dict):
+        """
+        High-level primitive:
+        Picks a block at start_pose and places it at end_pose.
+        Both poses must be in base_link frame.
+        """
+
+        if self.joint_state is None:
+            self.get_logger().error("No joint state available")
+            return
+
+        current_state = self.joint_state
+
+        sx, sy, sz = start_pose["x"], start_pose["y"], start_pose["z"]
+        fx, fy, fz = end_pose["x"], end_pose["y"], end_pose["z"]
+
+        self.get_logger().info(
+            f"Moving block from ({sx:.3f},{sy:.3f},{sz:.3f}) "
+            f"to ({fx:.3f},{fy:.3f},{fz:.3f})"
+        )
+
+        # -------------------------
+        # 1) Pre-grasp ABOVE start
+        # -------------------------
+        pre_grasp_js = self.ik_planner.compute_ik(
+            current_state,
+            sx - 0.0067,
+            sy - 0.0367,
+            sz + 0.267
+        )
+        if pre_grasp_js is None:
+            self.get_logger().error("Pre-grasp IK failed")
+            return
+
+        self.job_queue.append(pre_grasp_js)
+        current_state = pre_grasp_js
+
+        # -------------------------
+        # 2) Grasp pose
+        # -------------------------
+        grasp_js = self.ik_planner.compute_ik(
+            current_state,
+            sx - 0.0067,
+            sy - 0.0367,
+            sz + 0.1567
+        )
+        if grasp_js is None:
+            self.get_logger().error("Grasp IK failed")
+            return
+
+        self.job_queue.append(grasp_js)
+        current_state = grasp_js
+
+        # -------------------------
+        # 3) Close gripper
+        # -------------------------
+        self.job_queue.append("toggle_grip")
+
+        # -------------------------
+        # 4) Lift back to pre-grasp
+        # -------------------------
+        self.job_queue.append(pre_grasp_js)
+        current_state = pre_grasp_js
+
+        # -------------------------
+        # 5) Move ABOVE target
+        # -------------------------
+        pre_place_js = self.ik_planner.compute_ik(
+            current_state,
+            fx - 0.0067,
+            fy - 0.0367,
+            fz + 0.267
+        )
+        if pre_place_js is None:
+            self.get_logger().error("Pre-place IK failed")
+            return
+
+        self.job_queue.append(pre_place_js)
+        current_state = pre_place_js
+
+        # -------------------------
+        # 6) Lower to place pose
+        # -------------------------
+        place_js = self.ik_planner.compute_ik(
+            current_state,
+            fx - 0.0067,
+            fy - 0.0367,
+            fz + 0.1567
+        )
+        if place_js is None:
+            self.get_logger().error("Place IK failed")
+            return
+
+        self.job_queue.append(place_js)
+        current_state = place_js
+
+        # -------------------------
+        # 7) Open gripper
+        # -------------------------
+        self.job_queue.append("toggle_grip")
+
+        # -------------------------
+        # 8) Retreat back up
+        # -------------------------
+        self.job_queue.append(pre_place_js)
+
+        # Start execution if queue was previously empty
+        if len(self.job_queue) == 1:
+            self.execute_jobs()
 
     def joint_state_callback(self, msg: JointState):
         self.joint_state = msg
@@ -129,95 +229,19 @@ class UR7e_CubeGrasp(Node):
             return
 
         # Find block with maximum z-coordinate (height in base_link frame)
-        highest_block = max(blocks_in_base, key=lambda b: b['z'])
+        left_block = min(blocks_in_base, key=lambda b: b['x'])
         
         self.get_logger().info(
-            f"Selected highest block (ID {highest_block['id']}) at height z={highest_block['z']:.3f}m"
+            f"Selected leftmost block (ID {left_block['id']}) at height z={left_block['z']:.3f}m"
         )
 
         # Set the cube pose and mark as processed
-        self.cube_pose = highest_block
+        self.cube_pose = left_block
         self.blocks_processed = True
 
         # Plan and execute the grasp
-        self.plan_grasp_sequence(highest_block)
-
-    def plan_grasp_sequence(self, cube_pose_dict):
-        """Plan the grasp sequence for the selected cube"""
-        x = cube_pose_dict['x']
-        y = cube_pose_dict['y']
-        z = cube_pose_dict['z']
-        current_state = self.joint_state
-
-        self.get_logger().info(f"Planning grasp for cube at ({x:.3f}, {y:.3f}, {z:.3f})")
-
-        # Extract rotated quaternion components
-        qx, qy, qz, qw = self.rotated_quat
-
-        # 1) Move to Pre-Grasp Position (gripper above the cube) with rotated orientation
-        pre_grasp_js = self.ik_planner.compute_ik(
-            current_state, 
-            x + 0.01, 
-            y - 0.03, 
-            z + 0.25,
-            qx=qx, qy=qy, qz=qz, qw=qw
-        )
-        
-        if pre_grasp_js is None:
-            self.get_logger().error("Failed IK for pre-grasp")
-            return
-        self.job_queue.append(pre_grasp_js)
-        current_state = pre_grasp_js
-        self.get_logger().info("Added pre-grasp position to queue")
-
-        # 2) Move to Grasp Position (lower the gripper to the cube) with rotated orientation
-        grasp_js = self.ik_planner.compute_ik(
-            current_state, 
-            x + 0.01,
-            y - 0.03, 
-            z + 0.15,
-            qx=qx, qy=qy, qz=qz, qw=qw
-        )
-        
-        if grasp_js is None:
-            self.get_logger().error("Failed IK for grasp")
-            return
-        self.job_queue.append(grasp_js)
-        current_state = grasp_js
-        self.get_logger().info("Added grasp position to queue")
-
-        # 3) Close the gripper
-        self.job_queue.append('toggle_grip')
-        self.get_logger().info("Added gripper close to queue")
-
-        # 4) Move back to Pre-Grasp Position
-        self.job_queue.append(pre_grasp_js)
-        current_state = pre_grasp_js
-        self.get_logger().info("Added lift position to queue")
-
-        # 5) Move to release Position (0.4m in +x direction) with rotated orientation
-        release_js = self.ik_planner.compute_ik(
-            current_state, 
-            x + 0.4, 
-            y - 0.035, 
-            z + 0.185,
-            qx=qx, qy=qy, qz=qz, qw=qw
-        )
-        # (0.134, 0.697, -0.225)
-        
-        if release_js is None:
-            self.get_logger().error("Failed IK for release position")
-            return
-        self.job_queue.append(release_js)
-        current_state = release_js
-        self.get_logger().info("Added release position to queue")
-
-        # 6) Release the gripper
-        self.job_queue.append('toggle_grip')
-        self.get_logger().info("Added gripper open to queue")
-
-        # Start execution
-        self.execute_jobs()
+        self.move_block(left_block, self.FinalBlockPositions[0])
+        self.FinalBlockPositions.pop(0)
 
     def execute_jobs(self):
         if not self.job_queue:
