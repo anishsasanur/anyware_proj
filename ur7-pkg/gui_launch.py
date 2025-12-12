@@ -137,8 +137,8 @@ class SquareGUI:
                 "x": center_x,
                 "y": center_y
             })
-        # Sort by y (descending), then by x (descending)
-        positions.sort(key=lambda p: (-p["y"], -p["x"]))
+        # Sort by y (ascending), then by x (ascending)
+        positions.sort(key=lambda p: (p["y"], p["x"]))
         
         with open("planned_centers.json", "w") as f:
             json.dump(positions, f)

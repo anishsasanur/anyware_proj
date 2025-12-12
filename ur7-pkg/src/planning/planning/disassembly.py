@@ -124,6 +124,7 @@ class Disassembly(Node):
         with open("block_centers.txt", "a") as f:
             f.write(f"\n")
 
+        return
         self.plan_grasp(highest_block)
         self.execute_grasp()
 

@@ -1,3 +1,4 @@
+import json
 import rclpy
 from rclpy.node import Node
 from std_srvs.srv import Trigger
@@ -20,14 +21,14 @@ class Disassembly(Node):
             MarkerArray,
             "/block_centers",
             self.block_centers_callback,
-            1
+            10
         )
         # Subscriber for joint_states
         self.joint_state_sub = self.create_subscription(
             JointState,
             "/joint_states",
             self.joint_state_callback,
-            1
+            10
         )
         # Clients
         self.action_cli = ActionClient(
@@ -36,167 +37,235 @@ class Disassembly(Node):
         )
         self.gripper_cli = self.create_client(Trigger, "/toggle_gripper")
 
-        # TF setup
+        # TF Cache
+        self.tf_cached = None
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
-        # Joint state and IK
+        # Block Vision Cache
+        self.final_block_positions = None
+
+        self.initial_block_positions = None
+
+        # Planning
         self.joint_state = None
         self.home_joint_state = None
-        
         self.ik_planner = IKPlanner()
-        self.job_queue = [] # types: JointState or "toggle_grip"
+
+        # Execution
+        self.job_queue = []
+        self.is_executing = False
 
         # Wrist pointing down ([qx,  qy,  qz,  qw ])
         base_rot = R.from_quat([0.0, 1.0, 0.0, 0.0])
         # 90 degree rotation for z:
         z_90_rot = R.from_euler("z", 90, degrees=True)
-        # Tgt wrist rotation
+        # Target wrist rotation
         self.wrist_rot = (z_90_rot * base_rot).as_quat()
-        
-        print("[Disassembly] node initalized")
 
 
     def joint_state_callback(self, msg: JointState):
-        if self.joint_state is None:
+        if self.home_joint_state is None:
             self.home_joint_state = msg
         self.joint_state = msg
 
 
     def block_centers_callback(self, marker_array: MarkerArray):
-        if len(self.job_queue) != 0:
+        if self.is_executing or len(self.job_queue) != 0:
+            print("still executing...")
             return
 
         if self.joint_state is None:
-            print("[Disassembly] no joint state yet")
+            print("no joint state yet")
             return
 
         if len(marker_array.markers) == 0:
-            print("[Disassembly] no blocks received")
+            print("no blocks received")
             return
 
-        print(f"[Disassembly] received {len(marker_array.markers)} blocks")
+        print(f"received {len(marker_array.markers)} blocks")
 
-        # Transform all block centers to base_link frame
-        blocks_in_base = []
-        for marker in marker_array.markers:
+        if self.tf_cached is None:
             try:
-                point = PointStamped()
-                point.header = marker.header
-                point.point = marker.pose.position
-
-                transform = self.tf_buffer.lookup_transform(
+                frame_id = marker_array.markers[0].header.frame_id
+                self.tf_cached = self.tf_buffer.lookup_transform(
                     "base_link",
-                    marker.header.frame_id,
-                    rclpy.time.Time(),
-                    timeout=rclpy.duration.Duration(seconds=1.0)
+                    frame_id,
+                    rclpy.time.Time()
                 )
-                point_in_base = do_transform_point(point, transform)
-
-                blocks_in_base.append({
-                    "id": marker.id,
-                    "x": point_in_base.point.x,
-                    "y": point_in_base.point.y,
-                    "z": point_in_base.point.z
-                })
             except Exception as e:
-                print(f"ERROR: [Disassembly] failed to transform block {marker.id}: \n{e}")
-                continue
+                print(f"ERROR: no transform to base_link")
+                return
+            
+        if self.final_block_positions is None:
+            with open("final_pos.json", "r") as f:
+                self.final_block_positions = json.load(f)
 
-        if len(blocks_in_base) == 0:
-            print("ERROR: [Disassembly] failed to transform any blocks")
-            return
-        print(f"[Disassembly] transformed {len(blocks_in_base)} blocks to base_link frame")
+        
+        if self.initial_block_positions is None:
+            blocks_in_base = []
+            for marker in marker_array.markers:
+                try:
+                    point = PointStamped()
+                    point.header = marker.header
+                    point.point = marker.pose.position
+
+                    point_in_base = do_transform_point(point, self.tf_cached)
+                    x, y, z = point_in_base.point.x, point_in_base.point.y, point_in_base.point.z
+
+                    with open("block_centers.txt", "a") as f:
+                        f.write(f"{marker.id}: {x:.5f} {y:.5f} {z:.5f}\n")
+
+                    blocks_in_base.append({"id": marker.id, "x": x, "y": y, "z": z})
+
+                except Exception as e:
+                    print(f"ERROR: failed to transform block {marker.id}: \n{e}")
+                    continue
+            
+            self.initial_block_positions = sorted(blocks_in_base, key=lambda b: b["x"])
+
+            if len(blocks_in_base) == 0:
+                print("ERROR: failed to transform any blocks")
+                return
+            print(f"transformed {len(blocks_in_base)} blocks to base_link frame")
 
         # Find block with highest z-coordinate
-        leftmost_block = max(blocks_in_base, key=lambda b: b["x"])
+        leftmost = self.initial_block_positions.pop(0)
+        destination = self.final_block_positions.pop(0)
         
-        print(f"Found highest block {leftmost_block["id"]}")
-        
-        self.plan_grasp(leftmost_block, {"x": 0.5, "y": 0.0, "z": 0.1})
+        print(f"Found leftmost block at ({leftmost['x']:.3f}, {leftmost['y']:.3f}, {leftmost['z']:.3f})")
+        print(f"Planned destination at ({destination['x']:.3f}, {destination['y']:.3f}, {destination['z']:.3f})")
+
+        with open("block_centers.txt", "a") as f:
+            f.write(f"\n")
+
+        self.plan_grasp(leftmost, destination)
         self.execute_grasp()
 
 
-    def plan_grasp(self, block_pose: dict, place_pose: dict):
-        
-        bx, by, bz = block_pose["x"], block_pose["y"], block_pose["z"]
-        px, py, pz = place_pose["x"], place_pose["y"], place_pose["z"]
+    def plan_grasp(self, block_pose: dict, destination_pose: dict):
+        x_offset = -0.022
+        y_offset = -0.022
+        z_offset = 0.144
 
-        curr_pose = self.joint_state
+        x = block_pose["x"]
+        y = block_pose["y"]
+        z = block_pose["z"]
+        
+        print(f"Planning grasp for block at ({x:.3f}, {y:.3f}, {z:.3f})")
+
+        # Target wrist rotation
         qx, qy, qz, qw = self.wrist_rot
 
-        # Pre-grasp
-        pre_grasp = self.ik_planner.compute_ik(
-            curr_pose, bx+0.01, by-0.03, bz+0.25,
+        # Move above block
+        pre_grasp_pose = self.ik_planner.compute_ik(
+            self.joint_state, 
+            x + x_offset,
+            y + y_offset,
+            z + z_offset + 0.1,
             qx=qx, qy=qy, qz=qz, qw=qw
         )
-        if pre_grasp is None:
+        if pre_grasp_pose is None:
+            print("ERROR: failed to plan pre_grasp_pose")
             return
-        self.job_queue.append(pre_grasp)
-        curr_pose = pre_grasp
+        self.job_queue.append(pre_grasp_pose)
 
-        # Grasp
-        grasp = self.ik_planner.compute_ik(
-            curr_pose, bx+0.01, by-0.03, bz+0.15,
+        # Move onto block
+        grasp_pose = self.ik_planner.compute_ik(
+            pre_grasp_pose,  # Plan from pre-grasp pose
+            x + x_offset,
+            y + y_offset,
+            z + z_offset,
             qx=qx, qy=qy, qz=qz, qw=qw
         )
-        if grasp is None:
+        if grasp_pose is None:
+            print("ERROR: failed to plan grasp_pose")
+            self.job_queue.clear()
             return
-        self.job_queue.append(grasp)
+        self.job_queue.append(grasp_pose)
+        
+        # Close gripper
         self.job_queue.append("toggle_grip")
 
-        # Lift
-        self.job_queue.append(pre_grasp)
-        curr_pose = pre_grasp
-
-        # Pre-drop
-        pre_drop = self.ik_planner.compute_ik(
-            curr_pose, px, py, pz+0.20,
+        # Move onto block
+        lift_pose = self.ik_planner.compute_ik(
+            grasp_pose,
+            x + x_offset,
+            y + y_offset,
+            z + z_offset + 0.1,
             qx=qx, qy=qy, qz=qz, qw=qw
         )
-        if pre_drop is None:
+        if lift_pose is None:
+            print("ERROR: failed to plan lift_pose")
+            self.job_queue.clear()
             return
-        self.job_queue.append(pre_drop)
-        curr_pose = pre_drop
+        self.job_queue.append(lift_pose)
 
-        # Drop
-        drop = self.ik_planner.compute_ik(
-            curr_pose, px, py, pz,
+        # Move to pre drop pose
+        pre_drop_pose = self.ik_planner.compute_ik(
+            lift_pose,
+            destination_pose["x"],
+            destination_pose["y"],
+            destination_pose["z"] + 0.1,
             qx=qx, qy=qy, qz=qz, qw=qw
         )
-        if drop is None:
+        if pre_drop_pose is None:
+            print("ERROR: failed to plan pre drop_pose")
+            self.job_queue.clear()
             return
-        self.job_queue.append(drop)
+
+        # Move to drop pose
+        drop_pose = self.ik_planner.compute_ik(
+            pre_drop_pose,
+            destination_pose["x"],
+            destination_pose["y"],
+            destination_pose["z"],
+            qx=qx, qy=qy, qz=qz, qw=qw
+        )
+        if drop_pose is None:
+            print("ERROR: failed to plan drop_pose")
+            self.job_queue.clear()
+            return
+        
+        self.job_queue.append(drop_pose)
         self.job_queue.append("toggle_grip")
-
-        # Home
+        
+        # Return to home
         self.job_queue.append(self.home_joint_state)
+        self.joint_state = self.home_joint_state
 
 
     def execute_grasp(self):
         if len(self.job_queue) == 0:
-            print("[Disassembly] all jobs complete")
-            # rclpy.shutdown()
+            print("all jobs complete, ready for next block")
+            self.is_executing = False
             return
-        print(f"[Disassembly] Executing job queue: {len(self.job_queue)} jobs")
+        
+        self.is_executing = True
+        print(f"Executing job queue: {len(self.job_queue)} jobs")
         job = self.job_queue.pop(0)
 
         if isinstance(job, JointState):
             traj = self.ik_planner.plan_to_joints(job)
             if traj is None:
-                print("ERROR: [Disassembly] failed to execute plan")
+                print("ERROR: failed to execute plan")
+                self.job_queue.clear()
+                self.is_executing = False
                 return
             self._execute_joint_trajectory(traj.joint_trajectory)
         
         elif job == "toggle_grip":
             self._toggle_gripper()
         else:
-            print(f"ERROR: [Disassembly] unknown job type {job}")
+            print(f"ERROR: unknown job type {job}")
+            self.is_executing = False
 
 
     def _toggle_gripper(self):
         if not self.gripper_cli.wait_for_service(timeout_sec=5.0):
-            print("ERROR: [Disassembly] gripper unavailable")
+            print("ERROR: gripper unavailable")
+            self.job_queue.clear()
+            self.is_executing = False
             rclpy.shutdown()
             return
         req = Trigger.Request()
@@ -205,32 +274,32 @@ class Disassembly(Node):
         self.execute_grasp()
 
     def _execute_joint_trajectory(self, joint_traj):
-        print("[Disassembly] waiting for controller action server...")
         self.action_cli.wait_for_server()
         goal = FollowJointTrajectory.Goal()
         goal.trajectory = joint_traj
 
-        print("[Disassembly] sending trajectory to controller...")
         send_future = self.action_cli.send_goal_async(goal)
         send_future.add_done_callback(self._on_goal_sent)
 
     def _on_goal_sent(self, future):
         goal_handle = future.result()
         if not goal_handle.accepted:
-            print("ERROR: [Disassembly] goal rejected by controller")
+            print("ERROR: goal rejected by controller")
+            self.job_queue.clear()
+            self.is_executing = False
             rclpy.shutdown()
             return
-        print("[Disassembly] executing trajectory...")
         result_future = goal_handle.get_result_async()
         result_future.add_done_callback(self._on_exec_done)
 
     def _on_exec_done(self, future):
         try:
             result = future.result().result
-            print("[Disassembly] execution complete.")
             self.execute_grasp()
         except Exception as e:
-            print(f"ERROR: [Disassembly] execution failed: \n{e}")
+            print(f"ERROR: execution failed: \n{e}")
+            self.job_queue.clear()
+            self.is_executing = False
 
 
 def main(args=None):

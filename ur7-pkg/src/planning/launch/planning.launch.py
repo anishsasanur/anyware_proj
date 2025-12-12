@@ -119,5 +119,5 @@ def generate_launch_description():
         static_base_world,
         moveit_launch,
         rviz_node,
-        disassembly_node,
+        # disassembly_node,
     ])

@@ -5,8 +5,9 @@ from rclpy.node import Node
 from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Point
 
-BLOCK_WIDTH  = 0.067            # meters in real world
-BUILD_ORIGIN = [0.0, 0.67, 0.0] # offset from robot frame to GUI origin
+BLOCK_WIDTH  = 0.03           # meters in real world
+BUILD_ORIGIN = [0.04, 0.80, -0.063] # offset from robot frame to GUI origin
+# 0: 0.04092 0.67033 -0.24158
 
 class GuiToRobot(Node):
     def __init__(self):
@@ -31,6 +32,8 @@ class GuiToRobot(Node):
             return
         
         marker_array = MarkerArray()
+
+        block_positions = []
         
         for id, block in enumerate(planned_centers):
             x_gui = block["x"]
@@ -41,7 +44,7 @@ class GuiToRobot(Node):
             z_robot = BUILD_ORIGIN[2] + y_gui * BLOCK_WIDTH # z for robot == y for GUI
             
             marker = Marker()
-            marker.header.frame_id = "base_link"
+            marker.header.frame_id = "camera_color_optical_frame"
             marker.header.stamp = self.get_clock().now().to_msg()
 
             marker.id = id
@@ -62,9 +65,21 @@ class GuiToRobot(Node):
             marker.color.g = 1.0
             marker.color.b = 0.0
             marker.color.a = 1.0
+
+            block_pos = {
+                "x" : x_robot,
+                "y" : y_robot,
+                "z" : z_robot
+            }
+            block_positions.append(block_pos)
             
+
             marker.lifetime.sec = self.refresh_rate
             marker_array.markers.append(marker)
+        
+        with open("final_pos.json", "w") as f:
+            json.dump(block_positions, f)
+        print(f"Positions saved to pfinal_pos.json")
         
         self.planned_centers_pub.publish(marker_array)
         print(f"published {len(marker_array.markers)} markers to planned_centers")
