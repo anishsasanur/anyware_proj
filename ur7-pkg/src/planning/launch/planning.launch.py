@@ -19,7 +19,7 @@ def generate_launch_description():
         launch_arguments={
             "pointcloud.enable": "true",
             "rgb_camera.color_profile": "1920x1080x30",
-            "align_depth.enable": "true",
+            "align_depth.enable": "true"
         }.items(),
     )
 
@@ -57,29 +57,19 @@ def generate_launch_description():
     )
 
     # Planning TF node
-    planning_tf_node = Node(
+    static_tf_node = Node(
         package="planning",
-        executable="tf",
-        name="tf_node",
+        executable="stf",
+        name="static_tf_node",
         output="screen"
     )
 
-    # # Static TF: base_link -> world
-    # static_base_world = Node(
-    #     package="tf2_ros",
-    #     executable="static_transform_publisher",
-    #     name="static_base_world",
-    #     arguments=["0","0","0","0","0","0","1","base_link","world"],
-    #     output="screen",
-    # )
-
-    # TF: Robot Base -> Camera
-    # Adjust these numbers to match exactly where the camera is relative to the robot base.
-    camera_transform = Node(
+    # Static TF: base_link -> world
+    static_base_world = Node(
         package="tf2_ros",
         executable="static_transform_publisher",
-        name="camera_transform",
-        arguments=["1.0", "0", "0.5", "0", "0", "0", "1", "base_link", "camera_link"],
+        name="static_base_world",
+        arguments=["0","0","0","0","0","0","1","base_link","world"],
         output="screen",
     )
 
@@ -111,16 +101,23 @@ def generate_launch_description():
         output="screen",
         arguments=[]
     )
-    
+    # Disassembly Node
+    disassembly_node = Node(
+        package="planning",
+        executable="dis",
+        name="dis",
+        output="screen"
+    )
+
     return LaunchDescription([
         realsense_launch,
         aruco_launch,
         block_detection_node,
         gui_to_robot_node,
         ik_node,
-        planning_tf_node,
-        # static_base_world,
-        camera_transform,
+        static_tf_node,
+        static_base_world,
         moveit_launch,
         rviz_node,
+        disassembly_node,
     ])

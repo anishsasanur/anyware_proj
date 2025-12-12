@@ -11,7 +11,7 @@ class ConstantTransformPublisher(Node):
         super().__init__('constant_tf_publisher')
         self.br = StaticTransformBroadcaster(self)
 
-        # Homogeneous transform G_ar -> base_link
+        # Homogeneous transform G_ar->base_link
         G = np.array([
             [-1, 0, 0, 0.0],
             [ 0, 0, 1, 0.16],
@@ -19,7 +19,12 @@ class ConstantTransformPublisher(Node):
             [ 0, 0, 0, 1.0]
         ])
 
+        # Create TransformStamped
         self.transform = TransformStamped()
+        # ---------------------------
+        # TODO: Fill out TransformStamped message
+        # --------------------------
+        
         self.transform.header.frame_id = 'ar_marker_7'
         self.transform.child_frame_id = 'base_link'
 

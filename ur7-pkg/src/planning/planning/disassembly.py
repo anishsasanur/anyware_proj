@@ -20,14 +20,14 @@ class Disassembly(Node):
             MarkerArray,
             "/block_centers",
             self.block_centers_callback,
-            1
+            10
         )
         # Subscriber for joint_states
         self.joint_state_sub = self.create_subscription(
             JointState,
             "/joint_states",
             self.joint_state_callback,
-            1
+            10
         )
         # Clients
         self.action_cli = ActionClient(
@@ -36,26 +36,26 @@ class Disassembly(Node):
         )
         self.gripper_cli = self.create_client(Trigger, "/toggle_gripper")
 
-        # TF setup
+        # TF Cache
+        self.tf_cached = None
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
-        # Joint state and IK
+        # Planning
         self.joint_state = None
         self.home_joint_state = None
-        
         self.ik_planner = IKPlanner()
-        self.job_queue = [] # types: JointState or "toggle_grip"
-        self.is_executing = False  # Flag to prevent multiple simultaneous executions
+
+        # Execution
+        self.job_queue = []
+        self.is_executing = False
 
         # Wrist pointing down ([qx,  qy,  qz,  qw ])
         base_rot = R.from_quat([0.0, 1.0, 0.0, 0.0])
         # 90 degree rotation for z:
         z_90_rot = R.from_euler("z", 90, degrees=True)
-        # Tgt wrist rotation
+        # Target wrist rotation
         self.wrist_rot = (z_90_rot * base_rot).as_quat()
-        
-        print("Disassembly node initalized")
 
 
     def joint_state_callback(self, msg: JointState):
@@ -65,8 +65,8 @@ class Disassembly(Node):
 
 
     def block_centers_callback(self, marker_array: MarkerArray):
-        # Check if already executing
         if self.is_executing or len(self.job_queue) != 0:
+            print("still executing...")
             return
 
         if self.joint_state is None:
@@ -79,7 +79,19 @@ class Disassembly(Node):
 
         print(f"received {len(marker_array.markers)} blocks")
 
-        # Transform all block centers to base_link frame
+        if self.tf_cached is None:
+            try:
+                frame_id = marker_array.markers[0].header.frame_id
+                self.tf_cached = self.tf_buffer.lookup_transform(
+                    "base_link",
+                    frame_id,
+                    rclpy.time.Time()
+                )
+            except Exception as e:
+                print(f"ERROR: no transform to base_link")
+                return
+
+        # Transform all block centers to base_link
         blocks_in_base = []
         for marker in marker_array.markers:
             try:
@@ -87,20 +99,14 @@ class Disassembly(Node):
                 point.header = marker.header
                 point.point = marker.pose.position
 
-                transform = self.tf_buffer.lookup_transform(
-                    "base_link",
-                    marker.header.frame_id,
-                    rclpy.time.Time(),
-                    timeout=rclpy.duration.Duration(seconds=1.0)
-                )
-                point_in_base = do_transform_point(point, transform)
+                point_in_base = do_transform_point(point, self.tf_cached)
+                x, y, z = point_in_base.point.x, point_in_base.point.y, point_in_base.point.z
 
-                blocks_in_base.append({
-                    "id": marker.id,
-                    "x": point_in_base.point.x,
-                    "y": point_in_base.point.y,
-                    "z": point_in_base.point.z
-                })
+                with open("block_centers.txt", "a") as f:
+                    f.write(f"{marker.id}: {x:.5f} {y:.5f} {z:.5f}\n")
+
+                blocks_in_base.append({"id": marker.id, "x": x, "y": y, "z": z})
+
             except Exception as e:
                 print(f"ERROR: failed to transform block {marker.id}: \n{e}")
                 continue
@@ -114,31 +120,31 @@ class Disassembly(Node):
         highest_block = max(blocks_in_base, key=lambda b: b["z"])
         
         print(f"Found highest block {highest_block['id']}")
-        
+
+        with open("block_centers.txt", "a") as f:
+            f.write(f"\n")
+
         self.plan_grasp(highest_block)
         self.execute_grasp()
 
 
     def plan_grasp(self, block_pose: dict):
-        x_offset = 0.02
-        y_offset = -0.033
-        z_offset = 0.2
+        x_offset = -0.022
+        y_offset = -0.022
+        z_offset = 0.175
 
         x = block_pose["x"]
         y = block_pose["y"]
         z = block_pose["z"]
         
-        # Always start planning from current joint state
-        curr_pose = self.joint_state
-
         print(f"Planning grasp for block at ({x:.3f}, {y:.3f}, {z:.3f})")
 
         # Target wrist rotation
         qx, qy, qz, qw = self.wrist_rot
 
-        # 1. Move to pre-grasp (above block)
+        # Move above block
         pre_grasp_pose = self.ik_planner.compute_ik(
-            curr_pose, 
+            self.joint_state, 
             x + x_offset,
             y + y_offset,
             z + z_offset + 0.1,
@@ -147,10 +153,9 @@ class Disassembly(Node):
         if pre_grasp_pose is None:
             print("ERROR: failed to plan pre_grasp_pose")
             return
-        
         self.job_queue.append(pre_grasp_pose)
 
-        # 2. Move to grasp position
+        # Move onto block
         grasp_pose = self.ik_planner.compute_ik(
             pre_grasp_pose,  # Plan from pre-grasp pose
             x + x_offset,
@@ -162,15 +167,14 @@ class Disassembly(Node):
             print("ERROR: failed to plan grasp_pose")
             self.job_queue.clear()
             return
-        
         self.job_queue.append(grasp_pose)
         
-        # 3. Close gripper
+        # Close gripper
         self.job_queue.append("toggle_grip")
 
-        # 4. Lift block
+        # Move onto block
         lift_pose = self.ik_planner.compute_ik(
-            grasp_pose,  # Plan from grasp pose
+            grasp_pose,
             x + x_offset,
             y + y_offset,
             z + z_offset + 0.1,
@@ -180,12 +184,11 @@ class Disassembly(Node):
             print("ERROR: failed to plan lift_pose")
             self.job_queue.clear()
             return
-
         self.job_queue.append(lift_pose)
 
-        # 5. Move to drop position
+        # Move to drop pose
         drop_pose = self.ik_planner.compute_ik(
-            lift_pose,  # Plan from lift pose
+            lift_pose,
             x + 0.420,
             y - 0.069,
             z + 0.420,
@@ -198,8 +201,9 @@ class Disassembly(Node):
         self.job_queue.append(drop_pose)
         self.job_queue.append("toggle_grip")
         
-        # 8. Return to home
+        # Return to home
         self.job_queue.append(self.home_joint_state)
+        self.joint_state = self.home_joint_state
 
 
     def execute_grasp(self):

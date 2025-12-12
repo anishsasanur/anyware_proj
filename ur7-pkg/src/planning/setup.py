@@ -23,12 +23,10 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "ik = planning.ik:main",
             "ass = planning.assembly:main",
             "dis = planning.disassembly:main",
-            "pp = planning.pick_and_place:main"
-            "tf = planning.static_tf_transform:main",
-            "tcp = planning.transform_cube_pose:main",
+            "stf = planning.static_tf:main",
+            "ik = planning.ik:main",
         ],
     },
 )
