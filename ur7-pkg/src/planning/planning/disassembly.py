@@ -46,6 +46,7 @@ class Disassembly(Node):
         
         self.ik_planner = IKPlanner()
         self.job_queue = [] # types: JointState or "toggle_grip"
+        self.is_executing = False  # Flag to prevent multiple simultaneous executions
 
         # Wrist pointing down ([qx,  qy,  qz,  qw ])
         base_rot = R.from_quat([0.0, 1.0, 0.0, 0.0])
@@ -58,13 +59,14 @@ class Disassembly(Node):
 
 
     def joint_state_callback(self, msg: JointState):
-        if self.joint_state is None:
+        if self.home_joint_state is None:
             self.home_joint_state = msg
         self.joint_state = msg
 
 
     def block_centers_callback(self, marker_array: MarkerArray):
-        if len(self.job_queue) != 0:
+        # Check if already executing
+        if self.is_executing or len(self.job_queue) != 0:
             return
 
         if self.joint_state is None:
@@ -118,9 +120,15 @@ class Disassembly(Node):
 
 
     def plan_grasp(self, block_pose: dict):
+        x_offset = 0.02
+        y_offset = -0.033
+        z_offset = 0.2
+
         x = block_pose["x"]
         y = block_pose["y"]
         z = block_pose["z"]
+        
+        # Always start planning from current joint state
         curr_pose = self.joint_state
 
         print(f"Planning grasp for block at ({x:.3f}, {y:.3f}, {z:.3f})")
@@ -128,13 +136,12 @@ class Disassembly(Node):
         # Target wrist rotation
         qx, qy, qz, qw = self.wrist_rot
 
-        # +x: away from door
-        # +y: away from robot
+        # 1. Move to pre-grasp (above block)
         pre_grasp_pose = self.ik_planner.compute_ik(
             curr_pose, 
-            x,
-            y - 0.033,
-            z + 0.25,
+            x + x_offset,
+            y + y_offset,
+            z + z_offset + 0.1,
             qx=qx, qy=qy, qz=qz, qw=qw
         )
         if pre_grasp_pose is None:
@@ -142,55 +149,66 @@ class Disassembly(Node):
             return
         
         self.job_queue.append(pre_grasp_pose)
-        curr_pose = pre_grasp_pose
 
-        # +x: away from door
-        # +y: away from robot
+        # 2. Move to grasp position
         grasp_pose = self.ik_planner.compute_ik(
-            curr_pose,
-            x,
-            y - 0.033,
-            z + 0.15,
+            pre_grasp_pose,  # Plan from pre-grasp pose
+            x + x_offset,
+            y + y_offset,
+            z + z_offset,
             qx=qx, qy=qy, qz=qz, qw=qw
         )
         if grasp_pose is None:
             print("ERROR: failed to plan grasp_pose")
+            self.job_queue.clear()
             return
         
-        # Grasp the block
         self.job_queue.append(grasp_pose)
+        
+        # 3. Close gripper
         self.job_queue.append("toggle_grip")
 
-        # Move back to pre_grasp_pose
-        self.job_queue.append(pre_grasp_pose)
-        curr_pose = pre_grasp_pose
+        # 4. Lift block
+        lift_pose = self.ik_planner.compute_ik(
+            grasp_pose,  # Plan from grasp pose
+            x + x_offset,
+            y + y_offset,
+            z + z_offset + 0.1,
+            qx=qx, qy=qy, qz=qz, qw=qw
+        )
+        if lift_pose is None:
+            print("ERROR: failed to plan lift_pose")
+            self.job_queue.clear()
+            return
 
-        # Move to block drop position
+        self.job_queue.append(lift_pose)
+
+        # 5. Move to drop position
         drop_pose = self.ik_planner.compute_ik(
-            curr_pose,
+            lift_pose,  # Plan from lift pose
             x + 0.420,
             y - 0.069,
-            z + 0.167,
+            z + 0.420,
         )
         if drop_pose is None:
             print("ERROR: failed to plan drop_pose")
+            self.job_queue.clear()
             return
         
-        # Drop the block
         self.job_queue.append(drop_pose)
         self.job_queue.append("toggle_grip")
         
-        # Move back to home pose
+        # 8. Return to home
         self.job_queue.append(self.home_joint_state)
-
-        print("added plan to job queue")
 
 
     def execute_grasp(self):
         if len(self.job_queue) == 0:
-            print("all jobs complete")
-            # rclpy.shutdown()
+            print("all jobs complete, ready for next block")
+            self.is_executing = False
             return
+        
+        self.is_executing = True
         print(f"Executing job queue: {len(self.job_queue)} jobs")
         job = self.job_queue.pop(0)
 
@@ -198,6 +216,8 @@ class Disassembly(Node):
             traj = self.ik_planner.plan_to_joints(job)
             if traj is None:
                 print("ERROR: failed to execute plan")
+                self.job_queue.clear()
+                self.is_executing = False
                 return
             self._execute_joint_trajectory(traj.joint_trajectory)
         
@@ -205,11 +225,14 @@ class Disassembly(Node):
             self._toggle_gripper()
         else:
             print(f"ERROR: unknown job type {job}")
+            self.is_executing = False
 
 
     def _toggle_gripper(self):
         if not self.gripper_cli.wait_for_service(timeout_sec=5.0):
             print("ERROR: gripper unavailable")
+            self.job_queue.clear()
+            self.is_executing = False
             rclpy.shutdown()
             return
         req = Trigger.Request()
@@ -218,12 +241,10 @@ class Disassembly(Node):
         self.execute_grasp()
 
     def _execute_joint_trajectory(self, joint_traj):
-        print("waiting for controller action server...")
         self.action_cli.wait_for_server()
         goal = FollowJointTrajectory.Goal()
         goal.trajectory = joint_traj
 
-        print("sending trajectory to controller...")
         send_future = self.action_cli.send_goal_async(goal)
         send_future.add_done_callback(self._on_goal_sent)
 
@@ -231,19 +252,21 @@ class Disassembly(Node):
         goal_handle = future.result()
         if not goal_handle.accepted:
             print("ERROR: goal rejected by controller")
+            self.job_queue.clear()
+            self.is_executing = False
             rclpy.shutdown()
             return
-        print("executing trajectory...")
         result_future = goal_handle.get_result_async()
         result_future.add_done_callback(self._on_exec_done)
 
     def _on_exec_done(self, future):
         try:
             result = future.result().result
-            print("execution complete.")
             self.execute_grasp()
         except Exception as e:
             print(f"ERROR: execution failed: \n{e}")
+            self.job_queue.clear()
+            self.is_executing = False
 
 
 def main(args=None):

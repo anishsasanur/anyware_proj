@@ -24,7 +24,9 @@ setup(
     entry_points={
         "console_scripts": [
             "ik = planning.ik:main",
-            "main = planning.disassembly:main",
+            "ass = planning.assembly:main",
+            "dis = planning.disassembly:main",
+            "pp = planning.pick_and_place:main"
             "tf = planning.static_tf_transform:main",
             "tcp = planning.transform_cube_pose:main",
         ],

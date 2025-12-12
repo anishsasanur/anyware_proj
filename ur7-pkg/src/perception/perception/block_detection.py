@@ -17,7 +17,9 @@ class Detection(Node):
         super().__init__("realsense_pc_subscriber")
         
         # Camera intrinsics
-        self.fx, self.fy, self.cx, self.cy, self.ds = [0.001] * 5
+        self.fx, self.fy, self.cx, self.cy = [None] * 4
+        self.depth_scale = 0.001
+
         # Subscriber for camera_info
         self.camera_info_sub = self.create_subscription(
             CameraInfo,
@@ -59,7 +61,7 @@ class Detection(Node):
         self.fy = msg.k[4]
         self.cx = msg.k[2]
         self.cy = msg.k[5]
-        print(f"camera intrinsics fx={self.fx}, fy={self.fy}, cx={self.cx}, cy={self.cy}")
+        # print(f"camera intrinsics fx={self.fx}, fy={self.fy}, cx={self.cx}, cy={self.cy}")
     
     def depth_image_callback(self, msg: Image):
         self.depth_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
@@ -150,8 +152,8 @@ class Detection(Node):
         pointcloud = o3d.geometry.PointCloud.create_from_depth_image(
             depth_image,
             intrinsic,
-            depth_scale=1.0/self.ds, # Convert to m
-            depth_trunc=1.0   # Max depth in meters
+            depth_scale=1.0/self.depth_scale,
+            depth_trunc=10.0 # Max depth in m
         )
         # Remove invalid / near origin points
         points = np.asarray(pointcloud.points)
