@@ -51,7 +51,7 @@ class Detection(Node):
         self.refresh_rate = 2
         self.create_timer(self.refresh_rate, self.block_centers_callback)
         
-        print("[Detection] node initalized")
+        print("node initalized")
 
 
     def camera_info_callback(self, msg: CameraInfo):
@@ -59,7 +59,7 @@ class Detection(Node):
         self.fy = msg.k[4]
         self.cx = msg.k[2]
         self.cy = msg.k[5]
-        print(f"[Detection] camera intrinsics fx={self.fx}, fy={self.fy}, cx={self.cx}, cy={self.cy}")
+        print(f"camera intrinsics fx={self.fx}, fy={self.fy}, cx={self.cx}, cy={self.cy}")
     
     def depth_image_callback(self, msg: Image):
         self.depth_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
@@ -83,11 +83,11 @@ class Detection(Node):
         # Output data of SAM
         response = requests.post(SAM_URL, files=files, data=data)
         if response.status_code != 200:
-            print(f"ERROR: [Detection] SAM status code {response.status_code} \n{response.text}")
+            print(f"ERROR: SAM status code {response.status_code} \n{response.text}")
             return
         
         sam_data = response.json()
-        print(f"[Detection] SAM returned {sam_data['count']} masks")
+        print(f"SAM returned {sam_data['count']} masks")
         
         # All masks for Rviz
         all_masks = np.zeros_like(self.color_image)
@@ -135,7 +135,7 @@ class Detection(Node):
         self.publish_binary_masks(all_masks)
         self.publish_block_centers(block_centers)
 
-        print(f"[Detection] published {sam_data['count']} masks to /binary_masks")
+        print(f"published {sam_data['count']} masks to /binary_masks")
 
 
     def depth_to_pointcloud(self, depth: Image):
@@ -158,7 +158,7 @@ class Detection(Node):
         valid_mask = (points[:, 2] > 0.01)
         
         if np.sum(valid_mask) == 0:
-            print("ERROR: [Detection] invalid point cloud")
+            print("ERROR: invalid point cloud")
             return
         pcd_filtered = pointcloud.select_by_index(np.where(valid_mask)[0])
         
@@ -166,7 +166,7 @@ class Detection(Node):
         points_filtered = np.asarray(pcd_filtered.points)
         center = np.mean(points_filtered, axis=0)
         
-        print(f"[Detection] found {len(points_filtered)} points with center ({center})")
+        print(f"found {len(points_filtered)} points with center ({center})")
         return pcd_filtered, center
 
 
@@ -208,7 +208,7 @@ class Detection(Node):
             marker_array.markers.append(marker)
 
         self.block_centers_pub.publish(marker_array)
-        print(f"[Detection] published {len(marker_array.markers)} markers to /block_centers")
+        print(f"published {len(marker_array.markers)} markers to /block_centers")
 
 
 def main(args=None):

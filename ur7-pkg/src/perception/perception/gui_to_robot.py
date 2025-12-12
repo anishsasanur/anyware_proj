@@ -19,7 +19,7 @@ class GuiToRobot(Node):
         self.refresh_rate = 2
         self.create_timer(self.refresh_rate, self.publish_centers)
         
-        print("[GUI to robot] node initalized")
+        print("GuiToRobot node initalized")
 
     ## Converts centers from GUI frame to robot frame
     def publish_centers(self):
@@ -67,7 +67,7 @@ class GuiToRobot(Node):
             marker_array.markers.append(marker)
         
         self.planned_centers_pub.publish(marker_array)
-        print(f"[GUI to robot] published {len(marker_array.markers)} planned centers")
+        print(f"published {len(marker_array.markers)} markers to planned_centers")
 
 def main(args=None):
     rclpy.init(args=args)
