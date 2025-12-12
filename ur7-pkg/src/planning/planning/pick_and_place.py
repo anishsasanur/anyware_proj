@@ -140,7 +140,7 @@ class UR7e_CubeGrasp(Node):
         self.blocks_processed = True
 
         # Plan and execute the grasp
-        end_pose = {"x": 0.85, "y": 0.85, "z": 0.5}
+        end_pose = {"x": highest_block["x"] + 0.4, "y": highest_block["y"] - 0.035, "z": highest_block["z"] + 0.185}
         self.plan_grasp_sequence(highest_block, end_pose)
 
     def plan_grasp_sequence(self, cube_pose_dict, end_pose_dict):
@@ -216,7 +216,7 @@ class UR7e_CubeGrasp(Node):
             end_pose_dict['x'],
             end_pose_dict['y'],
             end_pose_dict['z'],
-            qx=qx, qy=qy, qz=qz, qw=qw
+            qx=qx, qy=qy, qz=qz, qw=qwss
         )
         
         if release_js is None:
