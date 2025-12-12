@@ -216,7 +216,7 @@ class UR7e_CubeGrasp(Node):
             end_pose_dict['x'],
             end_pose_dict['y'],
             end_pose_dict['z'],
-            qx=qx, qy=qy, qz=qz, qw=qwss
+            qx=qx, qy=qy, qz=qz, qw=qw
         )
         
         if release_js is None:
