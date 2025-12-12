@@ -4,7 +4,7 @@ ros2 launch planning planning.launch.py
 
 colcon build; source install/setup.bash
 
-ros2 run planning main
+ros2 run planning dis
 
 ros2 run ur7e_utils enable_comms
 

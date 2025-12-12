@@ -32,7 +32,7 @@ class BlockDetection(Node):
         # Subscribers
         self.create_subscription(
             CameraInfo,
-            "/camera/camera/color/camera_info",
+            "/camera/camera/aligned_depth_to_color/camera_info",
             self.camera_info_callback,
             1,
         )
@@ -122,7 +122,7 @@ class BlockDetection(Node):
             return None
 
         xs, ys, Z = xs[valid], ys[valid], Z[valid]
-        Z *= self.depth_scale
+        Z = Z * self.depth_scale
 
         X = (xs - self.cx) * Z / self.fx
         Y = (ys - self.cy) * Z / self.fy
@@ -166,7 +166,7 @@ class BlockDetection(Node):
             marker_array.markers.append(marker)
 
         self.block_centers_pub.publish(marker_array)
-        print(f"Published {len(marker_array)} centers to /block_centers")
+        print(f"Published {len(marker_array.markers)} centers to /block_centers")
 
 
 def main(args=None):
