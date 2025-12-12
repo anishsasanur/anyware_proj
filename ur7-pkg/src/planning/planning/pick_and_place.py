@@ -224,6 +224,7 @@ class UR7e_CubeGrasp(Node):
             return
         self.job_queue.append(release_js)
         current_state = release_js
+        self.joint_state = current_state
         self.get_logger().info("Added release position to queue")
 
         # 6) Release the gripper
