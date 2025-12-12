@@ -19,6 +19,7 @@ def generate_launch_description():
         launch_arguments={
             "pointcloud.enable": "true",
             "rgb_camera.color_profile": "1920x1080x30",
+            "align_depth.enable": "true",
         }.items(),
     )
 
@@ -52,14 +53,6 @@ def generate_launch_description():
         package="planning",
         executable="ik",
         name="ik_node",
-        output="screen"
-    )
-
-    # Transform cube pose node
-    tcp_node = Node(
-        package="planning",
-        executable="tcp",
-        name="tcp_node",
         output="screen"
     )
 
@@ -115,7 +108,6 @@ def generate_launch_description():
         block_detection_node,
         gui_to_robot_node,
         ik_node,
-        tcp_node,
         planning_tf_node,
         static_base_world,
         moveit_launch,
