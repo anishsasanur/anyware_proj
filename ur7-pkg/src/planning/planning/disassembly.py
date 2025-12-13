@@ -124,15 +124,14 @@ class Disassembly(Node):
         with open("block_centers.txt", "a") as f:
             f.write(f"\n")
 
-        return
         self.plan_grasp(highest_block)
         self.execute_grasp()
 
 
     def plan_grasp(self, block_pose: dict):
-        x_offset = -0.022
-        y_offset = -0.022
-        z_offset = 0.175
+        x_offset = -0.03
+        y_offset = -0.03
+        z_offset = 0.15
 
         x = block_pose["x"]
         y = block_pose["y"]

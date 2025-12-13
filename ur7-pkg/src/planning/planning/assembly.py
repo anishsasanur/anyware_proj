@@ -146,7 +146,7 @@ class Disassembly(Node):
     def plan_grasp(self, block_pose: dict, destination_pose: dict):
         x_offset = -0.022
         y_offset = -0.022
-        z_offset = 0.144
+        z_offset = 0.15
 
         x = block_pose["x"]
         y = block_pose["y"]
